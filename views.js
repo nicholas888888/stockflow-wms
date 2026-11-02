@@ -1,0 +1,309 @@
+/* =========================================================
+   StockFlow WMS — Views (dashboard, products, categories, inbound…)
+   ========================================================= */
+(function () {
+  const W = window.__WMS;
+  const { DB, $, $$, esc, money, icon, toast, beep, openDrawer, closeOverlays, openModal, confirmModal, state, go, renderNav } = W;
+  const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
+  const set = (html) => { $("#content").innerHTML = html; };
+
+  const badge = (cls, text, dot) => `<span class="badge ${cls}">${dot ? `<span class="d" style="background:currentColor"></span>` : ""}${text}</span>`;
+  const chanTag = (ch) => {
+    const map = { TikTok: ["tiktok", "TK"], Shopee: ["shopee", "SP"], Tokopedia: ["tokopedia", "TP"] };
+    const [cls, ab] = map[ch]; return `<span class="chan ${cls}"><span class="c">${ab}</span>${ch}</span>`;
+  };
+  const statusBadge = (st) => { const s = DB.orderStatuses[st]; return badge(s.badge, s.label, true); };
+  const stockColor = (p) => p.phys === 0 ? "#dc2626" : p.avail <= p.safety ? "#d97706" : "#16a34a";
+  const stockLabel = (p) => p.phys === 0 ? badge("b-red", "Out of stock", true) : p.avail <= p.safety ? badge("b-amber", "Low stock", true) : badge("b-green", "In stock", true);
+
+  /* ============================ DASHBOARD ============================ */
+  function dashboard() {
+    const pc = DB.pipelineCounts();
+    const totalRev = DB.revenueSeries.reduce((a, b) => a + b.rev, 0);
+    const totalOrd = DB.revenueSeries.reduce((a, b) => a + b.ord, 0);
+    const aov = totalRev / totalOrd;
+    const low = DB.products.filter(p => p.phys > 0 && p.avail <= p.safety);
+    const out = DB.products.filter(p => p.phys === 0);
+
+    const kpis = [
+      { ic: "💰", bg: "var(--green-bg)", c: "var(--green)", val: money(totalRev), lbl: "Revenue (7d)", t: "+12.4%", up: true },
+      { ic: "🧾", bg: "var(--blue-bg)", c: "var(--blue)", val: totalOrd.toString(), lbl: "Orders (7d)", t: "+8.1%", up: true },
+      { ic: "📊", bg: "var(--violet-bg)", c: "var(--violet)", val: money(aov), lbl: "Avg. Order Value", t: "+3.2%", up: true },
+      { ic: "⚠️", bg: "var(--amber-bg)", c: "var(--amber)", val: (low.length + out.length).toString(), lbl: "Stock Alerts", t: out.length + " OOS", up: false },
+    ];
+    const kpiCards = kpis.map(k => `
+      <div class="kpi">
+        <div class="top">
+          <div class="ic" style="background:${k.bg};color:${k.c};font-size:20px">${k.ic}</div>
+          <span class="trend ${k.up ? "up" : "down"}">${k.up ? "▲" : "▼"} ${k.t}</span>
+        </div>
+        <div class="val">${k.val}</div><div class="lbl">${k.lbl}</div>
+      </div>`).join("");
+
+    const stages = [
+      { k: "total", n: pc.total, t: "Total Orders", c: "var(--brand)" },
+      { k: "p", n: pc.Pending, t: "Waiting Process", c: "#64748b" },
+      { k: "pk", n: pc["Waiting Picking"], t: "Waiting Picking", c: "var(--blue)" },
+      { k: "pa", n: pc["Waiting Packing"], t: "Waiting Packing", c: "var(--violet)" },
+      { k: "ob", n: pc["Waiting Outbound"], t: "Waiting Outbound", c: "var(--amber)" },
+    ];
+    const pipe = stages.map(s => `
+      <div class="stage"><div class="n">${s.n}</div><div class="t">${s.t}</div>
+      <div class="bar"><i style="width:${Math.min(100, s.n / pc.total * 100)}%;background:${s.c}"></i></div></div>`).join("");
+
+    const alerts = [...out, ...low].slice(0, 5).map(p => `
+      <div class="pick-item" style="margin-bottom:8px;padding:11px 14px">
+        <div class="thumb" style="width:40px;height:40px;font-size:18px">${p.img}</div>
+        <div class="info"><b style="font-size:13px">${esc(p.name)}</b><span class="mono muted">${p.sku}</span></div>
+        <div class="right">${stockLabel(p)}<div class="muted" style="font-size:11.5px;margin-top:3px">${p.avail} / ${p.safety} safety</div></div>
+      </div>`).join("");
+
+    const feed = DB.activity.map(a => `
+      <div class="ev"><div class="dot ${a.color}">${a.ic}</div>
+      <div class="txt">${a.txt}<div class="t">${a.time}</div></div></div>`).join("");
+
+    set(`
+      <div class="page-head">
+        <div><h2>Welcome back, ${esc(state.user.name.split(" ")[0])} 👋</h2>
+        <p>Here's what's happening across your warehouse today — Monday, Nov 2, 2026.</p></div>
+        <div class="actions"><button class="btn btn--ghost btn--sm" id="dExport">Export report</button>
+        <button class="btn btn--primary btn--sm" data-nav="orders">View orders</button></div>
+      </div>
+
+      <div class="grid g-4" style="margin-bottom:18px">${kpiCards}</div>
+
+      <div class="card" style="margin-bottom:18px">
+        <div class="card__head"><h3>Fulfillment Throughput <span class="sub">— real-time pipeline</span></h3>
+          <div class="live"><span class="pulse"></span> updating every 3s</div></div>
+        <div class="card__body"><div class="pipe">${pipe}</div></div>
+      </div>
+
+      <div class="grid g-3" style="grid-template-columns:1.3fr 1fr">
+        <div class="card">
+          <div class="card__head"><h3>Revenue vs. Order Volume</h3><span class="sub">Last 7 days</span></div>
+          <div class="card__body"><canvas id="revChart" height="260"></canvas>
+            <div class="legend"><div class="l"><span class="sw" style="background:var(--brand)"></span>Revenue</div>
+            <div class="l"><span class="sw" style="background:#22d3ee"></span>Orders</div></div></div>
+        </div>
+        <div class="card">
+          <div class="card__head"><h3>Channel Breakdown</h3><span class="sub">By sales volume</span></div>
+          <div class="card__body"><div class="donut-wrap"><canvas id="donut" width="150" height="150"></canvas>
+            <div style="flex:1">${DB.channelSplit.map(c => `
+              <div class="row-between" style="padding:7px 0;border-bottom:1px solid var(--line-2)">
+                <span class="chan ${c.name.toLowerCase()}"><span class="c">${c.name.slice(0,2).toUpperCase()}</span>${c.name}</span>
+                <b>${c.value}%</b></div>`).join("")}</div></div></div>
+        </div>
+      </div>
+
+      <div class="grid g-3 mt-18" style="grid-template-columns:1fr 1.3fr">
+        <div class="card">
+          <div class="card__head"><h3>Stock & Inventory Alerts</h3><span class="sub">${low.length + out.length} items</span></div>
+          <div class="card__body">${alerts || '<div class="empty">All good 🎉</div>'}</div>
+        </div>
+        <div class="card">
+          <div class="card__head"><h3>Activity Log</h3><div class="live"><span class="pulse"></span> live feed</div></div>
+          <div class="card__body"><div class="feed">${feed}</div></div>
+        </div>
+      </div>`);
+
+    $("#dExport").addEventListener("click", () => toast("Dashboard report exported as PDF", "ok"));
+    $$("[data-nav]").forEach(b => b.addEventListener("click", () => go(b.dataset.nav)));
+    drawRevChart(); drawDonut();
+  }
+
+  function drawRevChart() {
+    const cv = $("#revChart"); if (!cv) return;
+    const dpr = window.devicePixelRatio || 1; const w = cv.clientWidth, h = 260;
+    cv.width = w * dpr; cv.height = h * dpr; cv.style.height = h + "px";
+    const x = cv.getContext("2d"); x.scale(dpr, dpr);
+    const data = DB.revenueSeries, pad = 36, bw = (w - pad * 2) / data.length;
+    const maxR = Math.max(...data.map(d => d.rev)), maxO = Math.max(...data.map(d => d.ord));
+    // grid
+    x.strokeStyle = "#eef0f3"; x.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) { const yy = pad + (h - pad * 1.6) * i / 4; x.beginPath(); x.moveTo(pad, yy); x.lineTo(w - pad, yy); x.stroke(); }
+    // bars (revenue)
+    data.forEach((d, i) => {
+      const bh = (d.rev / maxR) * (h - pad * 1.8);
+      const bx = pad + i * bw + bw * 0.22, by = h - pad * 0.8 - bh, bwi = bw * 0.56;
+      const grad = x.createLinearGradient(0, by, 0, by + bh); grad.addColorStop(0, "#6366f1"); grad.addColorStop(1, "#a5b4fc");
+      x.fillStyle = grad; roundRect(x, bx, by, bwi, bh, 5); x.fill();
+      x.fillStyle = "#94a3b8"; x.font = "11px Inter"; x.textAlign = "center"; x.fillText(d.d, pad + i * bw + bw / 2, h - 10);
+    });
+    // line (orders)
+    x.strokeStyle = "#22d3ee"; x.lineWidth = 2.5; x.beginPath();
+    data.forEach((d, i) => { const px = pad + i * bw + bw / 2, py = h - pad * 0.8 - (d.ord / maxO) * (h - pad * 1.8); i ? x.lineTo(px, py) : x.moveTo(px, py); });
+    x.stroke();
+    data.forEach((d, i) => { const px = pad + i * bw + bw / 2, py = h - pad * 0.8 - (d.ord / maxO) * (h - pad * 1.8);
+      x.fillStyle = "#fff"; x.beginPath(); x.arc(px, py, 4, 0, 7); x.fill(); x.strokeStyle = "#06b6d4"; x.lineWidth = 2.5; x.stroke(); });
+  }
+  function roundRect(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  function drawDonut() {
+    const cv = $("#donut"); if (!cv) return; const x = cv.getContext("2d"); const cx = 75, cy = 75, r = 60;
+    let a = -Math.PI / 2; const tot = DB.channelSplit.reduce((s, c) => s + c.value, 0);
+    DB.channelSplit.forEach(c => { const slice = c.value / tot * Math.PI * 2;
+      x.beginPath(); x.moveTo(cx, cy); x.arc(cx, cy, r, a, a + slice); x.closePath(); x.fillStyle = c.color; x.fill(); a += slice; });
+    x.beginPath(); x.arc(cx, cy, 36, 0, 7); x.fillStyle = "#fff"; x.fill();
+    x.fillStyle = "#0f172a"; x.font = "700 20px Inter"; x.textAlign = "center"; x.fillText("621", cx, cy - 2);
+    x.fillStyle = "#94a3b8"; x.font = "10px Inter"; x.fillText("orders", cx, cy + 13);
+  }
+
+  /* ============================ PRODUCTS ============================ */
+  let prodFilter = { q: "", cat: "all", brand: "all", stock: "all" };
+  function products() {
+    const cats = ["all", ...new Set(DB.products.map(p => p.cat))];
+    const brands = ["all", ...new Set(DB.products.map(p => p.brand))];
+    set(`
+      <div class="page-head">
+        <div><h2>Product Catalog</h2><p>${DB.products.length} SKUs · manage stock, locations & pricing</p></div>
+        <div class="actions">
+          <button class="btn btn--ghost btn--sm" id="pImport">Import CSV</button>
+          <button class="btn btn--primary btn--sm" id="pAdd">+ Add Product</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card__body">
+          <div class="toolbar">
+            <div class="grow search-sm">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input id="pSearch" placeholder="Search name, SKU or barcode…" value="${esc(prodFilter.q)}" />
+            </div>
+            <select class="select" id="pCat">${cats.map(c => `<option value="${c}" ${prodFilter.cat === c ? "selected" : ""}>${c === "all" ? "All categories" : c}</option>`).join("")}</select>
+            <select class="select" id="pBrand">${brands.map(b => `<option value="${b}" ${prodFilter.brand === b ? "selected" : ""}>${b === "all" ? "All brands" : b}</option>`).join("")}</select>
+            <select class="select" id="pStock">
+              <option value="all">All stock</option><option value="in">In stock</option>
+              <option value="low">Low stock</option><option value="out">Out of stock</option>
+            </select>
+          </div>
+          <div class="table-wrap"><table class="tbl" id="pTable"></table></div>
+        </div>
+      </div>`);
+    const rebind = () => renderProdTable();
+    $("#pSearch").addEventListener("input", e => { prodFilter.q = e.target.value; rebind(); });
+    $("#pCat").addEventListener("change", e => { prodFilter.cat = e.target.value; rebind(); });
+    $("#pBrand").addEventListener("change", e => { prodFilter.brand = e.target.value; rebind(); });
+    $("#pStock").value = prodFilter.stock;
+    $("#pStock").addEventListener("change", e => { prodFilter.stock = e.target.value; rebind(); });
+    $("#pAdd").addEventListener("click", () => productDrawer());
+    $("#pImport").addEventListener("click", () => toast("CSV import — map columns in the next step", "info"));
+    renderProdTable();
+  }
+  function renderProdTable() {
+    const f = prodFilter;
+    let list = DB.products.filter(p => {
+      const q = f.q.toLowerCase();
+      if (q && !(p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.ean.includes(q))) return false;
+      if (f.cat !== "all" && p.cat !== f.cat) return false;
+      if (f.brand !== "all" && p.brand !== f.brand) return false;
+      if (f.stock === "in" && !(p.avail > p.safety)) return false;
+      if (f.stock === "low" && !(p.phys > 0 && p.avail <= p.safety)) return false;
+      if (f.stock === "out" && p.phys !== 0) return false;
+      return true;
+    });
+    const t = $("#pTable");
+    if (!list.length) { t.innerHTML = `<tbody><tr><td><div class="empty"><div class="ic">🔍</div>No products match your filters</div></td></tr></tbody>`; return; }
+    t.innerHTML = `
+      <thead><tr><th>Product</th><th>Category / Brand</th><th>Location</th><th>Stock health</th><th class="right">Price</th><th></th></tr></thead>
+      <tbody>${list.map(p => `
+        <tr>
+          <td><div class="cell-prod"><div class="thumb">${p.img}</div>
+            <div><b>${esc(p.name)}</b><span class="mono">${p.sku}</span></div></div></td>
+          <td>${esc(p.cat)}<div class="muted" style="font-size:12px">${esc(p.brand)}</div></td>
+          <td><span class="badge b-gray" style="font-family:var(--font)">📍 ${p.loc}</span></td>
+          <td style="min-width:170px">
+            <div class="row-between" style="margin-bottom:4px">${stockLabel(p)}<b>${p.avail}</b></div>
+            <div class="stockbar"><i style="width:${Math.min(100, p.phys ? p.avail / (p.phys) * 100 : 0)}%;background:${stockColor(p)}"></i></div>
+            <div class="stock-nums"><span>Phys <b>${p.phys}</b></span><span>Rsv <b>${p.reserved}</b></span><span>Transit <b>${p.transit}</b></span></div>
+          </td>
+          <td class="right"><b>${money(p.price)}</b><div class="muted" style="font-size:12px">cost ${money(p.cost)}</div></td>
+          <td class="right nowrap">
+            <button class="btn btn--ghost btn--sm btn--icon" data-edit="${p.id}" title="Edit">✏️</button>
+            <button class="btn btn--ghost btn--sm btn--icon" data-del="${p.id}" title="Delete">🗑️</button>
+          </td>
+        </tr>`).join("")}</tbody>`;
+    $$("[data-edit]", t).forEach(b => b.addEventListener("click", () => productDrawer(DB.products.find(p => p.id == b.dataset.edit))));
+    $$("[data-del]", t).forEach(b => b.addEventListener("click", () => {
+      const p = DB.products.find(x => x.id == b.dataset.del);
+      openModal(confirmModal("🗑️", "var(--red-bg)", "Delete product?", `“${esc(p.name)}” will be soft-deleted and hidden from channels. You can restore it from the trash.`, "Delete", "btn--danger", () => {
+        DB.products = DB.products.filter(x => x.id != p.id); closeOverlays(); renderProdTable(); renderNav(); toast("Product soft-deleted", "ok");
+      }));
+    }));
+  }
+  function productDrawer(p) {
+    const edit = !!p; p = p || { img: "📦", name: "", sku: "", ean: "", cat: "Gloves", brand: "Rival", loc: "", phys: 0, avail: 0, reserved: 0, transit: 0, safety: 0, price: 0, cost: 0 };
+    openDrawer(`
+      <div class="drawer__head"><div><h3>${edit ? "Edit" : "New"} Product</h3><p>${edit ? esc(p.sku) : "Create a catalog item"}</p></div>
+        <button class="x-btn" id="dClose">✕</button></div>
+      <div class="drawer__body">
+        <div class="form-sec-title">Media</div>
+        <div class="upload">⬆️ Drag primary image or click to upload</div>
+        <div class="gallery"><div class="g">${p.img}</div><div class="g">➕</div><div class="g">➕</div></div>
+        <div class="hr mt-18"></div>
+        <div class="form-sec-title">Details</div>
+        <div class="form-grid">
+          <div class="field"><label>Product name</label><input class="input" id="fName" value="${esc(p.name)}" placeholder="Pro Boxing Gloves 16oz"/></div>
+          <div class="form-grid cols-2">
+            <div class="field"><label>SKU (unique)</label><input class="input mono" id="fSku" value="${esc(p.sku)}" placeholder="RVL-GLV-16-RED"/></div>
+            <div class="field"><label>EAN / Barcode</label><input class="input mono" id="fEan" value="${esc(p.ean)}" placeholder="899…"/></div>
+          </div>
+          <div class="form-grid cols-2">
+            <div class="field"><label>Category</label><select class="select" style="width:100%">${[...new Set(DB.products.map(x=>x.cat))].map(c=>`<option ${c===p.cat?"selected":""}>${c}</option>`).join("")}</select></div>
+            <div class="field"><label>Brand</label><select class="select" style="width:100%">${DB.brands.map(b=>`<option ${b.name===p.brand?"selected":""}>${b.name}</option>`).join("")}</select></div>
+          </div>
+          <div class="field"><label>Bin / Warehouse location</label><input class="input" id="fLoc" value="${esc(p.loc)}" placeholder="Aisle-02-Shelf-B"/></div>
+        </div>
+        <div class="hr mt-18"></div>
+        <div class="form-sec-title">Stock levels</div>
+        <div class="form-grid cols-2">
+          <div class="field"><label>Physical stock</label><input class="input" type="number" value="${p.phys}"/></div>
+          <div class="field"><label>Available stock</label><input class="input" type="number" value="${p.avail}"/></div>
+          <div class="field"><label>Reserved stock</label><input class="input" type="number" value="${p.reserved}"/></div>
+          <div class="field"><label>In-transit stock</label><input class="input" type="number" value="${p.transit}"/></div>
+          <div class="field"><label>Safety threshold</label><input class="input" type="number" value="${p.safety}"/></div>
+        </div>
+        <div class="hr mt-18"></div>
+        <div class="form-sec-title">Pricing</div>
+        <div class="form-grid cols-2">
+          <div class="field"><label>Sale price ($)</label><input class="input" type="number" step="0.01" value="${p.price}"/></div>
+          <div class="field"><label>Cost price ($)</label><input class="input" type="number" step="0.01" value="${p.cost}"/></div>
+        </div>
+      </div>
+      <div class="drawer__foot"><button class="btn btn--ghost" id="dCancel">Cancel</button>
+        <button class="btn btn--primary" id="dSave">${edit ? "Save changes" : "Create product"}</button></div>`);
+    $("#dClose").onclick = $("#dCancel").onclick = closeOverlays;
+    $("#dSave").onclick = () => { closeOverlays(); toast(edit ? "Product updated — synced to all channels" : "Product created", "ok"); };
+  }
+
+  /* ============================ CATEGORIES & BRANDS ============================ */
+  function categories() {
+    set(`
+      <div class="page-head"><div><h2>Categories & Brands</h2><p>Organize your catalog hierarchy and brand entities</p></div></div>
+      <div class="grid g-2">
+        <div class="card">
+          <div class="card__head"><h3>Product Categories</h3><button class="btn btn--primary btn--sm" id="addCat">+ Category</button></div>
+          <div class="card__body"><div class="table-wrap"><table class="tbl">
+            <thead><tr><th>Category</th><th>Slug</th><th class="right">Products</th><th>Status</th></tr></thead>
+            <tbody>${DB.categories.map(c => `<tr>
+              <td>${c.parent ? `<span class="muted">${esc(c.parent)} ›</span> ` : ""}<b>${esc(c.name)}</b></td>
+              <td class="mono muted">${c.slug}</td><td class="right">${c.products}</td>
+              <td>${badge(c.status === "Active" ? "b-green" : "b-gray", c.status, true)}</td></tr>`).join("")}</tbody>
+          </table></div></div>
+        </div>
+        <div class="card">
+          <div class="card__head"><h3>Brands</h3><button class="btn btn--primary btn--sm" id="addBrand">+ Brand</button></div>
+          <div class="card__body"><div class="table-wrap"><table class="tbl">
+            <thead><tr><th>Brand</th><th>Slug</th><th class="right">Products</th><th>Status</th></tr></thead>
+            <tbody>${DB.brands.map(b => `<tr>
+              <td><div class="cell-prod"><div class="thumb" style="width:34px;height:34px;font-size:13px;font-weight:800;background:var(--brand-50);color:var(--brand)">${b.name.slice(0,2).toUpperCase()}</div><b>${esc(b.name)}</b></div></td>
+              <td class="mono muted">${b.slug}</td><td class="right">${b.products}</td>
+              <td>${badge(b.status === "Active" ? "b-green" : "b-gray", b.status, true)}</td></tr>`).join("")}</tbody>
+          </table></div></div>
+        </div>
+      </div>`);
+    $("#addCat").onclick = () => toast("New category drawer", "info");
+    $("#addBrand").onclick = () => toast("New brand drawer", "info");
+  }
+
+  W.registerViews({ dashboard, products, categories });
+  // Part 2 registers the rest
+  W._part1Ready = true;
+})();
