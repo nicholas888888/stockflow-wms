@@ -1,12 +1,36 @@
-# StockFlow WMS — E-Commerce Inventory & Warehouse Management System (UI)
+# StockFlow WMS — E-Commerce Inventory & Warehouse Management System
 
-A complete, modern, minimalist **front-end UI** for a multi-channel e-commerce
-Warehouse Management System. Built as a **zero-dependency static web app**
-(vanilla HTML / CSS / JS) — no build step, no npm install. Just open it.
+A complete, modern, minimalist **full-stack** multi-channel e-commerce Warehouse
+Management System.
 
-## Run it
+- **Frontend** — a zero-dependency static web app (vanilla HTML / CSS / JS), no
+  build step. Runs on mock data standalone, or against the live API.
+- **Backend** — a zero-dependency Node.js REST + WebSocket API (stdlib only,
+  JSON file store). See [`server/README.md`](server/README.md).
 
-Open `index.html` in any modern browser. That's it.
+## Run the frontend
+
+Open `index.html` in any modern browser. That's it — it runs on in-memory mock
+data by default.
+
+## Run the backend (optional)
+
+```bash
+cd server
+npm start          # http://localhost:4000  (auto-seeds demo data)
+npm test           # 18 in-process API integration tests
+```
+
+Then point the UI at it by setting a global before the app loads (browser
+console, or edit `index.html`):
+
+```js
+window.WMS_API_BASE = "http://localhost:4000";
+```
+
+Reload — login now authenticates against the real API, with server-side RBAC,
+stock reservation (oversell lock), barcode scan verification, and a live
+WebSocket feed. Full endpoint list in [`server/README.md`](server/README.md).
 
 > Barcode-scan audio feedback uses the Web Audio API, which requires a user
 > interaction first (the login click unlocks it), so beeps play from the
