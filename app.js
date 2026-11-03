@@ -169,15 +169,35 @@
     });
   }
 
-  function signIn(user) {
+  async function signIn(user) {
     state.user = user;
     $("#authView").style.display = "none";
     $("#appView").classList.add("show");
+    // In API mode, pull live data into DB before first render, and open the live stream.
+    if (window.WMS_SYNC && window.WMS_SYNC.apiMode) {
+      try { await window.WMS_SYNC.hydrateAll(); } catch (e) {}
+      connectLiveStream();
+    }
     renderNav();
     renderSidebarUser();
     // role-based redirect
     go(DB.roles[user.role].home);
     toast(`Signed in as ${user.name} · ${DB.roles[user.role].label}`, "ok");
+  }
+
+  let liveSocket = null;
+  function connectLiveStream() {
+    if (!window.WMS_API || !window.WMS_API.enabled || liveSocket) return;
+    liveSocket = window.WMS_API.connectLive((evt) => {
+      // push server activity into the dashboard feed + refresh pipeline counts
+      if (evt && evt.text) {
+        DB.activity = DB.activity || [];
+        DB.activity.unshift({ id: "live-" + Date.now(), icon: evt.icon || "🔔", color: evt.color || "b-blue", text: evt.text, ts: evt.ts || Date.now() });
+        DB.activity = DB.activity.slice(0, 20);
+        if (state.route === "dashboard") VIEWS.dashboard();
+      }
+      if (evt && evt.type === "pipeline") renderNav();
+    });
   }
   function signOut() {
     state.user = null;
