@@ -28,9 +28,16 @@ console, or edit `index.html`):
 window.WMS_API_BASE = "http://localhost:4000";
 ```
 
-Reload — login now authenticates against the real API, with server-side RBAC,
-stock reservation (oversell lock), barcode scan verification, and a live
-WebSocket feed. Full endpoint list in [`server/README.md`](server/README.md).
+Reload — **the entire UI now runs against the live API**: login, product CRUD
+(add/edit/soft-delete persist), categories & brands, order process/print/bulk,
+barcode picking & packing scan sessions, outbound dispatch, inbound receiving,
+returns disposition, user CRUD, the RBAC permission matrix, and integrations —
+all backed by the server, with stock reservation (oversell lock) and a live
+WebSocket activity feed. Full endpoint list in
+[`server/README.md`](server/README.md).
+
+> When the API is **not** configured, every screen still works on in-memory mock
+> data (changes reset on reload). When it **is** configured, changes persist.
 
 > Barcode-scan audio feedback uses the Web Audio API, which requires a user
 > interaction first (the login click unlocks it), so beeps play from the

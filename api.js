@@ -47,7 +47,11 @@
 
     // catalog
     categories: () => req("GET", "/api/categories"),
+    createCategory: (c) => req("POST", "/api/categories", c),
+    updateCategory: (id, c) => req("PUT", "/api/categories/" + id, c),
     brands: () => req("GET", "/api/brands"),
+    createBrand: (b) => req("POST", "/api/brands", b),
+    updateBrand: (id, b) => req("PUT", "/api/brands/" + id, b),
 
     // orders
     pipeline: () => req("GET", "/api/orders/pipeline"),

@@ -6,6 +6,13 @@
   const W = window.__WMS;
   const { DB, $, $$, esc, money, icon, toast, beep, openDrawer, closeOverlays, openModal, confirmModal, state, go, renderNav } = W;
   const set = (html) => { $("#content").innerHTML = html; };
+  const API = window.WMS_API;
+  const SYNC = window.WMS_SYNC || { apiMode: false, refresh: async () => {}, normalizeOrder: (o) => o };
+  const apiMode = SYNC.apiMode;
+  async function apiDo(promise, okMsg) {
+    try { const r = await promise; if (okMsg) toast(okMsg, "ok"); return r || true; }
+    catch (e) { toast(e.message || "Request failed", "err"); return false; }
+  }
   const badge = (cls, text, dot) => `<span class="badge ${cls}">${dot ? `<span class="d" style="background:currentColor"></span>` : ""}${text}</span>`;
   const chanTag = (ch) => { const map = { TikTok: ["tiktok", "TK"], Shopee: ["shopee", "SP"], Tokopedia: ["tokopedia", "TP"] }; const [cls, ab] = map[ch]; return `<span class="chan ${cls}"><span class="c">${ab}</span>${ch}</span>`; };
   const statusBadge = (st) => { const s = DB.orderStatuses[st]; return badge(s.badge, s.label, true); };
@@ -40,22 +47,37 @@
     openDrawer(`
       <div class="drawer__head"><div><h3>Receive Stock</h3><p>${esc(po.id)}${po.supplier ? " · " + esc(po.supplier) : ""}</p></div><button class="x-btn" id="dc">✕</button></div>
       <div class="drawer__body">
-        <div class="field"><label>Select SKU</label><select class="select" style="width:100%">${DB.products.map(p=>`<option>${p.sku} — ${p.name}</option>`).join("")}</select></div>
+        <div class="field"><label>Select SKU</label><select class="select" id="rcSku" style="width:100%">${DB.products.map(p=>`<option value="${esc(p.sku)}">${p.sku} — ${p.name}</option>`).join("")}</select></div>
         <div class="form-grid cols-2">
-          <div class="field"><label>Target location</label><input class="input" value="A-02-B" placeholder="Aisle-Shelf"/></div>
-          <div class="field"><label>Received qty</label><input class="input" type="number" value="50"/></div>
+          <div class="field"><label>Target location</label><input class="input" id="rcLoc" value="A-02-B" placeholder="Aisle-Shelf"/></div>
+          <div class="field"><label>Received qty</label><input class="input" id="rcQty" type="number" value="50"/></div>
         </div>
         <div class="hr mt-18"></div>
         <div class="form-sec-title">Quality Check (QC)</div>
-        <div class="field"><label>QC result</label><select class="select" style="width:100%"><option>Passed — add to available</option><option>Partial — quarantine failures</option><option>Failed — reject batch</option></select></div>
+        <div class="field"><label>QC result</label><select class="select" id="rcQc" style="width:100%"><option value="passed">Passed — add to available</option><option value="partial">Partial — quarantine failures</option><option value="failed">Failed — reject batch</option></select></div>
         <div class="field"><label>Notes</label><textarea class="input" style="height:76px;padding:10px 14px" placeholder="Batch condition, seal check…"></textarea></div>
         <div class="card" style="background:var(--surface-2);margin-top:4px"><div class="card__body" style="padding:14px">
-          <div class="row-between" style="font-size:13px"><span class="muted">Available stock after receive</span><b style="color:var(--green)">+50 units → synced to 3 channels</b></div>
+          <div class="row-between" style="font-size:13px"><span class="muted">On confirm</span><b style="color:var(--green)">available stock updated → synced to 3 channels</b></div>
         </div></div>
       </div>
       <div class="drawer__foot"><button class="btn btn--ghost" id="dcc">Cancel</button><button class="btn btn--primary" id="ds">Confirm & Update Inventory</button></div>`);
     $("#dc").onclick = $("#dcc").onclick = closeOverlays;
-    $("#ds").onclick = () => { closeOverlays(); toast("Stock received — inventory synced across all channels", "ok"); beep("ok"); };
+    $("#ds").onclick = async () => {
+      const payload = { sku: $("#rcSku").value, quantity: Number($("#rcQty").value || 0), location: $("#rcLoc").value.trim(), qc: $("#rcQc").value, poId: po.id && po.id.startsWith("PO-") ? po.id : undefined };
+      if (payload.quantity <= 0) { toast("Received qty must be positive", "err"); return; }
+      if (apiMode) {
+        const r = await apiDo(API.receive(payload));
+        if (!r) return;
+        toast(`Received ${r.unitsAdded} units → synced to all channels`, "ok");
+        await SYNC.refresh("products"); await SYNC.refresh("purchaseOrders");
+      } else {
+        const p = DB.products.find(x => x.sku === payload.sku);
+        const added = payload.qc === "passed" ? payload.quantity : payload.qc === "partial" ? Math.floor(payload.quantity / 2) : 0;
+        if (p) { p.phys += added; p.avail += added; }
+        toast(`Received ${added} units — inventory synced across all channels`, "ok");
+      }
+      closeOverlays(); beep("ok"); if (state.route === "inbound") inbound();
+    };
   }
 
   /* ============================ RETURNS ============================ */
@@ -95,8 +117,21 @@
       </div></div>
       <div class="modal__foot"><button class="btn btn--ghost" id="dcancel" style="flex:1">Close</button></div>`);
     $("#dcancel").onclick = closeOverlays;
-    $("#restock").onclick = () => { closeOverlays(); toast("Restocked — available stock increased & synced", "ok"); beep("ok"); };
-    $("#quarantine").onclick = () => { closeOverlays(); toast("Moved to quarantine as defective", "info"); };
+    const decide = async (action, okMsg, kind) => {
+      if (apiMode) {
+        const ok = await apiDo(API.disposition(r.id, action), okMsg);
+        if (!ok) return;
+        await SYNC.refresh("returns"); if (action === "restock") await SYNC.refresh("products");
+      } else {
+        const rec = DB.returns.find(x => x.id === r.id);
+        if (action === "restock") { rec.status = "Restocked"; rec.disp = "Restock"; const p = DB.products.find(x => x.sku === r.sku); if (p) { p.phys += r.qty; p.avail += r.qty; } }
+        else { rec.status = "Quarantine"; rec.disp = "Defective"; }
+        toast(okMsg, kind);
+      }
+      closeOverlays(); beep("ok"); if (state.route === "returns") returns();
+    };
+    $("#restock").onclick = () => decide("restock", "Restocked — available stock increased & synced", "ok");
+    $("#quarantine").onclick = () => decide("defective", "Moved to quarantine as defective", "info");
   }
 
   /* ============================ ORDERS ============================ */
@@ -176,23 +211,39 @@
         </td></tr>`).join("")}</tbody>`;
     const all = $("#oAll");
     all.onchange = () => $$(".oRow").forEach(c => c.checked = all.checked);
-    $$("[data-proc]").forEach(b => b.onclick = () => {
-      const o = DB.orders.find(x => x.id === b.dataset.proc); o.status = "Waiting Picking";
-      toast(`${o.id} → Waiting for Picking`, "ok"); renderOrderTable(); renderNav();
+    $$("[data-proc]").forEach(b => b.onclick = async () => {
+      const o = DB.orders.find(x => x.id === b.dataset.proc);
+      if (apiMode) {
+        const ok = await apiDo(API.processOrder(o.id), `${o.id} → Waiting for Picking`);
+        if (!ok) return;
+        await SYNC.refresh("orders"); await SYNC.refresh("products");
+      } else { o.status = "Waiting Picking"; toast(`${o.id} → Waiting for Picking`, "ok"); }
+      renderOrderTable(); renderNav();
     });
-    $$("[data-print]").forEach(b => b.onclick = () => {
+    $$("[data-print]").forEach(b => b.onclick = async () => {
       const o = DB.orders.find(x => x.id === b.dataset.print);
-      if (o.status === "Pending") o.status = "Printed";
-      toast(`Invoice + ${o.courier} waybill printed for ${o.id}`, "ok"); renderOrderTable(); renderNav();
+      if (apiMode) {
+        const ok = await apiDo(API.printOrder(o.id), `Invoice + ${o.courier} waybill printed for ${o.id}`);
+        if (!ok) return;
+        await SYNC.refresh("orders");
+      } else { if (o.status === "Pending") o.status = "Printed"; toast(`Invoice + ${o.courier} waybill printed for ${o.id}`, "ok"); }
+      renderOrderTable(); renderNav();
     });
   }
-  function batchAction(kind) {
+  async function batchAction(kind) {
     const ids = $$(".oRow:checked").map(c => c.dataset.id);
     if (!ids.length) { toast("Select at least one order", "err"); return; }
-    if (kind === "process") { ids.forEach(id => { const o = DB.orders.find(x => x.id === id); if (o.status === "Pending") o.status = "Waiting Picking"; });
-      toast(`${ids.length} orders moved to Waiting for Picking`, "ok"); }
-    else { ids.forEach(id => { const o = DB.orders.find(x => x.id === id); if (o.status === "Pending") o.status = "Printed"; });
-      toast(`Batch printed ${ids.length} invoices + waybills`, "ok"); }
+    if (apiMode) {
+      const r = await apiDo(API.bulkOrders(kind, ids));
+      if (!r) return;
+      toast(kind === "process" ? `${r.affected} orders moved to Waiting for Picking` : `Batch printed ${r.affected} invoices + waybills`, "ok");
+      await SYNC.refresh("orders"); if (kind === "process") await SYNC.refresh("products");
+    } else {
+      if (kind === "process") { ids.forEach(id => { const o = DB.orders.find(x => x.id === id); if (o.status === "Pending") o.status = "Waiting Picking"; });
+        toast(`${ids.length} orders moved to Waiting for Picking`, "ok"); }
+      else { ids.forEach(id => { const o = DB.orders.find(x => x.id === id); if (o.status === "Pending") o.status = "Printed"; });
+        toast(`Batch printed ${ids.length} invoices + waybills`, "ok"); }
+    }
     renderOrderTable(); renderNav();
   }
 
@@ -294,9 +345,20 @@
     setTimeout(() => b.classList.remove("ok", "err"), 600);
   }
 
-  function handleInvoiceScan(val) {
-    const { order } = pickSession;
+  async function handleInvoiceScan(val) {
+    const { mode, order } = pickSession;
     if (!val) return;
+    if (apiMode) {
+      try {
+        await API.startSession(mode, val); // server validates invoice & order state
+        beep("ok"); flashBox("ok"); toast("Invoice verified — session started", "ok");
+        renderScanUI(false);
+      } catch (e) {
+        beep("err"); flashBox("err");
+        openModal(errorModal("Invalid invoice", `${esc(e.message || "Scan rejected")} — expected <b>${order.id}</b>.`));
+      }
+      return;
+    }
     if (val.toUpperCase() === order.bc || val === order.id) {
       beep("ok"); flashBox("ok"); toast("Invoice verified — session started", "ok");
       renderScanUI(false);
@@ -306,10 +368,31 @@
     }
   }
 
-  function handleSkuScan(val) {
-    const { order, counts } = pickSession;
+  async function handleSkuScan(val) {
+    const { mode, order, counts } = pickSession;
     if (!val) return;
     const field = $("#scanField");
+
+    if (apiMode) {
+      let r;
+      try { r = await API.scan(mode, order.id, val); }
+      catch (e) { beep("err"); flashBox("err"); openModal(errorModal("Scan error", esc(e.message || "Request failed"))); field.value = ""; field.focus(); return; }
+      // sync local counts from authoritative server session
+      if (r.session && r.session.items) r.session.items.forEach(it => { counts[it.sku] = it.scanned; });
+      if (r.audio === "error") {
+        beep("err"); flashBox("err");
+        const title = r.result === "excess" ? "Excess quantity" : "Unknown barcode";
+        openModal(errorModal(title, esc(r.message)));
+        field.value = ""; field.focus(); return;
+      }
+      beep("ok"); flashBox("ok");
+      // update all rows from server session
+      if (r.session && r.session.items) r.session.items.forEach(it => updateScanProgress(it.sku));
+      field.value = ""; field.focus();
+      if (r.result === "complete") { await SYNC.refresh("orders"); completeSession(); }
+      return;
+    }
+
     const item = order.items.find(it => it.p.sku.toUpperCase() === val.toUpperCase() || it.p.ean === val);
     if (!item) {
       beep("err"); flashBox("err");
@@ -349,7 +432,7 @@
 
   function completeSession() {
     const { mode, order } = pickSession;
-    order.status = mode === "picking" ? "Waiting Packing" : "Waiting Outbound";
+    if (!apiMode) order.status = mode === "picking" ? "Waiting Packing" : "Waiting Outbound";
     renderNav();
     const nextLabel = mode === "picking" ? "Picked ✓ → sent to Packing" : "Packed ✓ → ready for Outbound";
     openModal(`<div class="modal__body"><div class="modal__ic" style="background:var(--green-bg);font-size:28px">✅</div>
@@ -402,10 +485,24 @@
             <b>🔁 Status sync:</b> Shipped status + tracking number auto-pushed to the marketplace API in real time.</div></div>
         </div></div>
       </div>`);
-    const dispatch = () => {
+    const dispatch = async () => {
       const v = $("#obField").value.trim(); if (!v) return;
-      const o = DB.orders.find(x => x.waybill.toLowerCase() === v.toLowerCase() || x.bc.toLowerCase() === v.toLowerCase() || x.id.toLowerCase() === v.toLowerCase());
       const box = $("#obBox");
+      if (apiMode) {
+        let r;
+        try { r = await API.dispatch(v); }
+        catch (e) { beep("err"); box.classList.add("err"); setTimeout(() => box.classList.remove("err"), 600); openModal(errorModal("Dispatch error", esc(e.message || "Request failed"))); return; }
+        if (r.result === "shipped") {
+          beep("ok"); box.classList.add("ok"); setTimeout(() => box.classList.remove("ok"), 600);
+          toast(r.message + ` — status pushed to ${r.order.channel}`, "ok");
+          await SYNC.refresh("orders"); await SYNC.refresh("products"); renderNav(); outbound();
+        } else {
+          beep("err"); box.classList.add("err"); setTimeout(() => box.classList.remove("err"), 600);
+          openModal(errorModal("Not ready for dispatch", esc(r.message)));
+        }
+        return;
+      }
+      const o = DB.orders.find(x => x.waybill.toLowerCase() === v.toLowerCase() || x.bc.toLowerCase() === v.toLowerCase() || x.id.toLowerCase() === v.toLowerCase());
       if (o && o.status === "Waiting Outbound") {
         o.status = "Shipped"; beep("ok"); box.classList.add("ok"); setTimeout(() => box.classList.remove("ok"), 600);
         toast(`${o.id} dispatched via ${o.courier} — status pushed to ${o.channel}`, "ok");
@@ -453,26 +550,55 @@
     $("#addUser").onclick = () => userDrawer();
     $$("[data-eu]").forEach(b => b.onclick = () => userDrawer(DB.users.find(u => u.id === b.dataset.eu)));
     $$("[data-du]").forEach(b => b.onclick = () => { const u = DB.users.find(x => x.id === b.dataset.du);
-      openModal(confirmModal("🗑️","var(--red-bg)","Remove user?",`“${esc(u.name)}” will lose access immediately.`,"Remove","btn--danger",() => {
-        DB.users = DB.users.filter(x => x.id !== u.id); closeOverlays(); users(); toast("User removed","ok"); })); });
-    $$("[data-perm]").forEach(cb => cb.onchange = () => toast(`Permission updated: ${cb.dataset.perm.replace(":"," → ")} ${cb.checked?"enabled":"disabled"}`,"info"));
+      openModal(confirmModal("🗑️","var(--red-bg)","Remove user?",`“${esc(u.name)}” will lose access immediately.`,"Remove","btn--danger", async () => {
+        if (apiMode) { const ok = await apiDo(API.deleteUser(u.id), "User removed"); if (!ok) return; await SYNC.refresh("users"); }
+        else { DB.users = DB.users.filter(x => x.id !== u.id); toast("User removed","ok"); }
+        closeOverlays(); users(); })); });
+    $$("[data-perm]").forEach(cb => cb.onchange = async () => {
+      const [role, page] = cb.dataset.perm.split(":");
+      if (apiMode) {
+        const ok = await apiDo(API.setPermission(role, page, cb.checked));
+        if (!ok) { cb.checked = !cb.checked; return; }
+        // update local access map so nav/guards reflect change
+        const set = new Set(DB.access[role]); cb.checked ? set.add(page) : set.delete(page); DB.access[role] = Array.from(set);
+      } else {
+        const set = new Set(DB.access[role]); cb.checked ? set.add(page) : set.delete(page); DB.access[role] = Array.from(set);
+      }
+      toast(`Permission updated: ${role} → ${page} ${cb.checked?"enabled":"disabled"}`,"info");
+      if (role === state.user.role) renderNav();
+    });
   }
   function userDrawer(u) {
     const edit = !!u; u = u || { name: "", email: "", username: "", role: "operator", status: "Active" };
+    const roleLabelToKey = (label) => Object.entries(DB.roles).find(([, r]) => r.label === label)?.[0] || "operator";
     openDrawer(`<div class="drawer__head"><div><h3>${edit?"Edit":"New"} User</h3><p>${edit?esc(u.email):"Create an account & assign role"}</p></div><button class="x-btn" id="uc">✕</button></div>
       <div class="drawer__body"><div class="form-grid">
-        <div class="field"><label>Full name</label><input class="input" value="${esc(u.name)}" placeholder="Jane Doe"/></div>
+        <div class="field"><label>Full name</label><input class="input" id="uName" value="${esc(u.name)}" placeholder="Jane Doe"/></div>
         <div class="form-grid cols-2">
-          <div class="field"><label>Username</label><input class="input mono" value="${esc(u.username)}" placeholder="janed"/></div>
-          <div class="field"><label>Status</label><select class="select" style="width:100%"><option ${u.status==="Active"?"selected":""}>Active</option><option ${u.status==="Inactive"?"selected":""}>Inactive</option></select></div>
+          <div class="field"><label>Username</label><input class="input mono" id="uUsername" value="${esc(u.username)}" placeholder="janed"/></div>
+          <div class="field"><label>Status</label><select class="select" id="uStatus" style="width:100%"><option ${u.status==="Active"?"selected":""}>Active</option><option ${u.status==="Inactive"?"selected":""}>Inactive</option></select></div>
         </div>
-        <div class="field"><label>Email</label><input class="input" value="${esc(u.email)}" placeholder="jane@wms.io"/></div>
-        <div class="field"><label>Password</label><input class="input" type="password" value="demo1234"/></div>
-        <div class="field"><label>Assigned role</label><select class="select" style="width:100%">${Object.entries(DB.roles).map(([k,r])=>`<option ${u.role===k?"selected":""}>${r.label}</option>`).join("")}</select></div>
+        <div class="field"><label>Email</label><input class="input" id="uEmail" value="${esc(u.email)}" placeholder="jane@wms.io"/></div>
+        <div class="field"><label>Password</label><input class="input" id="uPass" type="password" value="demo1234"/></div>
+        <div class="field"><label>Assigned role</label><select class="select" id="uRole" style="width:100%">${Object.entries(DB.roles).map(([k,r])=>`<option value="${k}" ${u.role===k?"selected":""}>${r.label}</option>`).join("")}</select></div>
       </div></div>
       <div class="drawer__foot"><button class="btn btn--ghost" id="ucc">Cancel</button><button class="btn btn--primary" id="us">${edit?"Save":"Create user"}</button></div>`);
     $("#uc").onclick = $("#ucc").onclick = closeOverlays;
-    $("#us").onclick = () => { closeOverlays(); toast(edit?"User updated":"User created & invite sent","ok"); };
+    $("#us").onclick = async () => {
+      const payload = { name: $("#uName").value.trim(), username: $("#uUsername").value.trim(), email: $("#uEmail").value.trim(), status: $("#uStatus").value, role: $("#uRole").value };
+      const pass = $("#uPass").value; if (pass && pass !== "demo1234") payload.password = pass; else if (!edit) payload.password = pass || "demo1234";
+      if (!payload.name || !payload.username || !payload.email) { toast("Name, username and email are required", "err"); return; }
+      if (apiMode) {
+        const ok = await apiDo(edit ? API.updateUser(u.id, payload) : API.createUser(payload), edit ? "User updated" : "User created & invite sent");
+        if (!ok) return;
+        await SYNC.refresh("users");
+      } else {
+        if (edit) Object.assign(DB.users.find(x => x.id === u.id), payload);
+        else DB.users.push({ id: "U-" + (DB.users.length + 1).toString().padStart(3, "0"), ...payload });
+        toast(edit ? "User updated" : "User created & invite sent", "ok");
+      }
+      closeOverlays(); users();
+    };
   }
 
   /* ============================ INTEGRATIONS ============================ */
@@ -480,23 +606,31 @@
     set(`
       <div class="page-head"><div><h2>Channel Integrations</h2><p>Connect marketplaces, sync orders, inventory & status in real time</p></div></div>
       <div class="grid g-3" style="margin-bottom:18px">
-        ${DB.integrations.map(c => `
+        ${DB.integrations.map(c => {
+          const color = c.color || { tiktok: "#111827", shopee: "#ee4d2d", tokopedia: "#42b549" }[c.id] || "#4f46e5";
+          const abbr = c.abbr || (c.id ? c.id.slice(0, 2).toUpperCase() : c.name.slice(0, 2).toUpperCase());
+          const ordersN = c.orders != null ? c.orders : (c.orders24h != null ? c.orders24h : 0);
+          const errorsN = c.errors != null ? c.errors : (c.errors24h != null ? c.errors24h : 0);
+          const interval = c.interval != null ? c.interval : (c.intervalMin != null ? c.intervalMin : 5);
+          const synced = c.synced || (c.lastSync ? new Date(c.lastSync).toLocaleTimeString() : "—");
+          const connected = c.status === "Connected";
+          return `
           <div class="integ">
-            <div class="top"><div class="logo" style="background:${c.color}">${c.abbr}</div>
-              <div><b>${c.name}</b><br><span>${badge(c.status==="Connected"?"b-green":"b-amber", c.status, true)}</span></div>
-              <div style="margin-left:auto"><label class="switch"><input type="checkbox" ${c.status==="Connected"?"checked":""} data-conn="${c.id}"/><span class="sl"></span></label></div>
+            <div class="top"><div class="logo" style="background:${color}">${abbr}</div>
+              <div><b>${c.name}</b><br><span>${badge(connected?"b-green":"b-amber", c.status, true)}</span></div>
+              <div style="margin-left:auto"><label class="switch"><input type="checkbox" ${connected?"checked":""} data-conn="${c.id}"/><span class="sl"></span></label></div>
             </div>
-            <div class="stat"><div class="s"><b>${c.orders}</b><span>Orders synced (24h)</span></div>
+            <div class="stat"><div class="s"><b>${ordersN}</b><span>Orders synced (24h)</span></div>
               <div class="s"><b>${c.webhooks}</b><span>Webhooks received</span></div></div>
             <div class="row-between" style="font-size:12.5px;padding:8px 0;border-top:1px solid var(--line-2)">
-              <span class="muted">Last sync</span><b>${c.synced}</b></div>
+              <span class="muted">Last sync</span><b>${synced}</b></div>
             <div class="row-between" style="font-size:12.5px;padding:8px 0;border-top:1px solid var(--line-2)">
-              <span class="muted">Sync interval</span><b>every ${c.interval} min</b></div>
+              <span class="muted">Sync interval</span><b>every ${interval} min</b></div>
             <div class="row-between" style="font-size:12.5px;padding:8px 0;border-top:1px solid var(--line-2)">
-              <span class="muted">Errors (24h)</span><b style="color:${c.errors?"var(--red)":"var(--green)"}">${c.errors}</b></div>
-            <button class="btn ${c.status==="Connected"?"btn--ghost":"btn--primary"} btn--block btn--sm mt-18" data-cfg="${c.id}">
-              ${c.status==="Connected"?"Manage connection":"Reconnect via OAuth"}</button>
-          </div>`).join("")}
+              <span class="muted">Errors (24h)</span><b style="color:${errorsN?"var(--red)":"var(--green)"}">${errorsN}</b></div>
+            <button class="btn ${connected?"btn--ghost":"btn--primary"} btn--block btn--sm mt-18" data-cfg="${c.id}">
+              ${connected?"Manage connection":"Reconnect via OAuth"}</button>
+          </div>`; }).join("")}
       </div>
       <div class="grid g-2">
         <div class="card"><div class="card__head"><h3>Sync Configuration</h3></div><div class="card__body">
@@ -518,8 +652,27 @@
           </table></div></div>
         </div>
       </div>`);
-    $$("[data-conn]").forEach(c => c.onchange = () => toast(`${DB.integrations.find(x=>x.id===c.dataset.conn).name} ${c.checked?"connected":"disconnected"}`, c.checked?"ok":"info"));
-    $$("[data-cfg]").forEach(b => b.onclick = () => toast(`Opening OAuth config for ${DB.integrations.find(x=>x.id===b.dataset.cfg).name}`, "info"));
+    $$("[data-conn]").forEach(c => c.onchange = async () => {
+      const integ = DB.integrations.find(x => x.id === c.dataset.conn);
+      if (apiMode) {
+        const ok = await apiDo(API.updateIntegration(integ.id, { connected: c.checked }), `${integ.name} ${c.checked ? "connected" : "disconnected"}`);
+        if (!ok) { c.checked = !c.checked; return; }
+        await SYNC.refresh("integrations"); integrations();
+      } else {
+        integ.status = c.checked ? "Connected" : "Disconnected";
+        toast(`${integ.name} ${c.checked ? "connected" : "disconnected"}`, c.checked ? "ok" : "info");
+      }
+    });
+    $$("[data-cfg]").forEach(b => b.onclick = async () => {
+      const integ = DB.integrations.find(x => x.id === b.dataset.cfg);
+      if (apiMode) {
+        const ok = await apiDo(API.syncIntegration(integ.id), `${integ.name} sync triggered`);
+        if (!ok) return;
+        await SYNC.refresh("integrations"); integrations();
+      } else {
+        toast(`Opening OAuth config for ${integ.name}`, "info");
+      }
+    });
   }
 
   W.registerViews({ inbound, returns, orders, picking, packing, outbound, users, integrations });

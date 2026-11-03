@@ -6,6 +6,14 @@
   const { DB, $, $$, esc, money, icon, toast, beep, openDrawer, closeOverlays, openModal, confirmModal, state, go, renderNav } = W;
   const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
   const set = (html) => { $("#content").innerHTML = html; };
+  const API = window.WMS_API;
+  const SYNC = window.WMS_SYNC || { apiMode: false, refresh: async () => {} };
+  const apiMode = SYNC.apiMode;
+  // Wrap an API mutation with error-to-toast handling; returns true on success.
+  async function apiDo(promise, okMsg) {
+    try { const r = await promise; if (okMsg) toast(okMsg, "ok"); return r || true; }
+    catch (e) { toast(e.message || "Request failed", "err"); return false; }
+  }
 
   const badge = (cls, text, dot) => `<span class="badge ${cls}">${dot ? `<span class="d" style="background:currentColor"></span>` : ""}${text}</span>`;
   const chanTag = (ch) => {
@@ -58,9 +66,17 @@
         <div class="right">${stockLabel(p)}<div class="muted" style="font-size:11.5px;margin-top:3px">${p.avail} / ${p.safety} safety</div></div>
       </div>`).join("");
 
+    const relTime = (a) => {
+      if (a.time) return a.time;
+      if (!a.ts) return "";
+      const s = Math.max(1, Math.round((Date.now() - a.ts) / 1000));
+      if (s < 60) return s + "s ago";
+      const m = Math.round(s / 60); if (m < 60) return m + " min ago";
+      const h = Math.round(m / 60); return h + "h ago";
+    };
     const feed = DB.activity.map(a => `
-      <div class="ev"><div class="dot ${a.color}">${a.ic}</div>
-      <div class="txt">${a.txt}<div class="t">${a.time}</div></div></div>`).join("");
+      <div class="ev"><div class="dot ${a.color}">${a.ic || a.icon || "🔔"}</div>
+      <div class="txt">${a.txt || a.text || ""}<div class="t">${relTime(a)}</div></div></div>`).join("");
 
     set(`
       <div class="page-head">
@@ -223,8 +239,16 @@
     $$("[data-edit]", t).forEach(b => b.addEventListener("click", () => productDrawer(DB.products.find(p => p.id == b.dataset.edit))));
     $$("[data-del]", t).forEach(b => b.addEventListener("click", () => {
       const p = DB.products.find(x => x.id == b.dataset.del);
-      openModal(confirmModal("🗑️", "var(--red-bg)", "Delete product?", `“${esc(p.name)}” will be soft-deleted and hidden from channels. You can restore it from the trash.`, "Delete", "btn--danger", () => {
-        DB.products = DB.products.filter(x => x.id != p.id); closeOverlays(); renderProdTable(); renderNav(); toast("Product soft-deleted", "ok");
+      openModal(confirmModal("🗑️", "var(--red-bg)", "Delete product?", `“${esc(p.name)}” will be soft-deleted and hidden from channels. You can restore it from the trash.`, "Delete", "btn--danger", async () => {
+        if (apiMode) {
+          const ok = await apiDo(API.deleteProduct(p.id), "Product soft-deleted");
+          if (!ok) return;
+          await SYNC.refresh("products");
+        } else {
+          DB.products = DB.products.filter(x => x.id != p.id);
+          toast("Product soft-deleted", "ok");
+        }
+        closeOverlays(); renderProdTable(); renderNav();
       }));
     }));
   }
@@ -246,31 +270,56 @@
             <div class="field"><label>EAN / Barcode</label><input class="input mono" id="fEan" value="${esc(p.ean)}" placeholder="899…"/></div>
           </div>
           <div class="form-grid cols-2">
-            <div class="field"><label>Category</label><select class="select" style="width:100%">${[...new Set(DB.products.map(x=>x.cat))].map(c=>`<option ${c===p.cat?"selected":""}>${c}</option>`).join("")}</select></div>
-            <div class="field"><label>Brand</label><select class="select" style="width:100%">${DB.brands.map(b=>`<option ${b.name===p.brand?"selected":""}>${b.name}</option>`).join("")}</select></div>
+            <div class="field"><label>Category</label><select class="select" id="fCat" style="width:100%">${[...new Set(DB.products.map(x=>x.cat))].map(c=>`<option ${c===p.cat?"selected":""}>${c}</option>`).join("")}</select></div>
+            <div class="field"><label>Brand</label><select class="select" id="fBrand" style="width:100%">${DB.brands.map(b=>`<option ${b.name===p.brand?"selected":""}>${b.name}</option>`).join("")}</select></div>
           </div>
           <div class="field"><label>Bin / Warehouse location</label><input class="input" id="fLoc" value="${esc(p.loc)}" placeholder="Aisle-02-Shelf-B"/></div>
         </div>
         <div class="hr mt-18"></div>
         <div class="form-sec-title">Stock levels</div>
         <div class="form-grid cols-2">
-          <div class="field"><label>Physical stock</label><input class="input" type="number" value="${p.phys}"/></div>
-          <div class="field"><label>Available stock</label><input class="input" type="number" value="${p.avail}"/></div>
-          <div class="field"><label>Reserved stock</label><input class="input" type="number" value="${p.reserved}"/></div>
-          <div class="field"><label>In-transit stock</label><input class="input" type="number" value="${p.transit}"/></div>
-          <div class="field"><label>Safety threshold</label><input class="input" type="number" value="${p.safety}"/></div>
+          <div class="field"><label>Physical stock</label><input class="input" id="fPhys" type="number" value="${p.phys}"/></div>
+          <div class="field"><label>Available stock</label><input class="input" id="fAvail" type="number" value="${p.avail}"/></div>
+          <div class="field"><label>Reserved stock</label><input class="input" id="fReserved" type="number" value="${p.reserved}"/></div>
+          <div class="field"><label>In-transit stock</label><input class="input" id="fTransit" type="number" value="${p.transit}"/></div>
+          <div class="field"><label>Safety threshold</label><input class="input" id="fSafety" type="number" value="${p.safety}"/></div>
         </div>
         <div class="hr mt-18"></div>
         <div class="form-sec-title">Pricing</div>
         <div class="form-grid cols-2">
-          <div class="field"><label>Sale price ($)</label><input class="input" type="number" step="0.01" value="${p.price}"/></div>
-          <div class="field"><label>Cost price ($)</label><input class="input" type="number" step="0.01" value="${p.cost}"/></div>
+          <div class="field"><label>Sale price ($)</label><input class="input" id="fPrice" type="number" step="0.01" value="${p.price}"/></div>
+          <div class="field"><label>Cost price ($)</label><input class="input" id="fCost" type="number" step="0.01" value="${p.cost}"/></div>
         </div>
       </div>
       <div class="drawer__foot"><button class="btn btn--ghost" id="dCancel">Cancel</button>
         <button class="btn btn--primary" id="dSave">${edit ? "Save changes" : "Create product"}</button></div>`);
     $("#dClose").onclick = $("#dCancel").onclick = closeOverlays;
-    $("#dSave").onclick = () => { closeOverlays(); toast(edit ? "Product updated — synced to all channels" : "Product created", "ok"); };
+    $("#dSave").onclick = async () => {
+      const num = (id) => Number($("#" + id).value || 0);
+      const payload = {
+        img: p.img || "📦",
+        name: $("#fName").value.trim(),
+        sku: $("#fSku").value.trim(),
+        ean: $("#fEan").value.trim(),
+        cat: $("#fCat").value,
+        brand: $("#fBrand").value,
+        loc: $("#fLoc").value.trim(),
+        phys: num("fPhys"), avail: num("fAvail"), reserved: num("fReserved"),
+        transit: num("fTransit"), safety: num("fSafety"), price: num("fPrice"), cost: num("fCost"),
+      };
+      if (!payload.name || !payload.sku) { toast("Name and SKU are required", "err"); return; }
+      if (apiMode) {
+        const ok = await apiDo(edit ? API.updateProduct(p.id, payload) : API.createProduct(payload),
+          edit ? "Product updated — synced to all channels" : "Product created");
+        if (!ok) return;
+        await SYNC.refresh("products");
+      } else {
+        if (edit) { Object.assign(DB.products.find(x => x.id === p.id), payload); }
+        else { DB.products.push({ id: Math.max(0, ...DB.products.map(x => x.id)) + 1, deleted: false, ...payload }); }
+        toast(edit ? "Product updated — synced to all channels" : "Product created", "ok");
+      }
+      closeOverlays(); renderProdTable(); renderNav();
+    };
   }
 
   /* ============================ CATEGORIES & BRANDS ============================ */
@@ -284,7 +333,7 @@
             <thead><tr><th>Category</th><th>Slug</th><th class="right">Products</th><th>Status</th></tr></thead>
             <tbody>${DB.categories.map(c => `<tr>
               <td>${c.parent ? `<span class="muted">${esc(c.parent)} ›</span> ` : ""}<b>${esc(c.name)}</b></td>
-              <td class="mono muted">${c.slug}</td><td class="right">${c.products}</td>
+              <td class="mono muted">${c.slug}</td><td class="right">${c.products != null ? c.products : "—"}</td>
               <td>${badge(c.status === "Active" ? "b-green" : "b-gray", c.status, true)}</td></tr>`).join("")}</tbody>
           </table></div></div>
         </div>
@@ -299,8 +348,39 @@
           </table></div></div>
         </div>
       </div>`);
-    $("#addCat").onclick = () => toast("New category drawer", "info");
-    $("#addBrand").onclick = () => toast("New brand drawer", "info");
+    $("#addCat").onclick = () => catBrandDrawer("category");
+    $("#addBrand").onclick = () => catBrandDrawer("brand");
+  }
+
+  function catBrandDrawer(kind) {
+    const isCat = kind === "category";
+    openDrawer(`
+      <div class="drawer__head"><div><h3>New ${isCat ? "Category" : "Brand"}</h3><p>${isCat ? "Add a catalog category" : "Add a brand entity"}</p></div><button class="x-btn" id="cbClose">✕</button></div>
+      <div class="drawer__body"><div class="form-grid">
+        <div class="field"><label>Name</label><input class="input" id="cbName" placeholder="${isCat ? "e.g. Headgear" : "e.g. Twins"}"/></div>
+        ${isCat ? `<div class="field"><label>Parent category (optional)</label><select class="select" id="cbParent" style="width:100%"><option value="">— None (top level) —</option>${DB.categories.filter(c=>!c.parent).map(c=>`<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}</select></div>` : ""}
+        <div class="field"><label>Slug</label><input class="input mono" id="cbSlug" placeholder="auto-generated if blank"/></div>
+        <div class="field"><label>Description</label><textarea class="input" id="cbDesc" style="height:72px;padding:10px 14px"></textarea></div>
+        <div class="field"><label>Status</label><select class="select" id="cbStatus" style="width:100%"><option>Active</option><option>Inactive</option></select></div>
+      </div></div>
+      <div class="drawer__foot"><button class="btn btn--ghost" id="cbCancel">Cancel</button><button class="btn btn--primary" id="cbSave">Create ${isCat ? "category" : "brand"}</button></div>`);
+    $("#cbClose").onclick = $("#cbCancel").onclick = closeOverlays;
+    $("#cbSave").onclick = async () => {
+      const name = $("#cbName").value.trim();
+      if (!name) { toast("Name is required", "err"); return; }
+      const payload = { name, slug: $("#cbSlug").value.trim() || name.toLowerCase().replace(/\s+/g, "-"), description: $("#cbDesc").value.trim(), status: $("#cbStatus").value };
+      if (isCat) payload.parent = $("#cbParent").value || null;
+      if (apiMode) {
+        const ok = await apiDo(isCat ? API.createCategory(payload) : API.createBrand(payload), `${isCat ? "Category" : "Brand"} created`);
+        if (!ok) return;
+        await SYNC.refresh(isCat ? "categories" : "brands");
+      } else {
+        if (isCat) DB.categories.push({ id: "CAT-" + (DB.categories.length + 1), products: 0, ...payload });
+        else DB.brands.push({ id: "BR-" + (DB.brands.length + 1), products: 0, ...payload });
+        toast(`${isCat ? "Category" : "Brand"} created`, "ok");
+      }
+      closeOverlays(); categories();
+    };
   }
 
   W.registerViews({ dashboard, products, categories });
