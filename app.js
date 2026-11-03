@@ -122,6 +122,29 @@
     $("#loginForm").addEventListener("submit", e => {
       e.preventDefault();
       const alert = $("#loginAlert"), txt = $("#loginAlertText");
+
+      // --- API-backed login when a backend is configured ---
+      if (window.WMS_API && window.WMS_API.enabled) {
+        alert.classList.remove("show");
+        window.WMS_API.login($("#loginUser").value.trim(), $("#loginPass").value)
+          .then(({ token, user }) => {
+            window.WMS_API.setToken(token);
+            // Hydrate the local role maps from the server's response set is already
+            // in DB (same shape); sign in with the returned user.
+            signIn(user);
+          })
+          .catch(err => {
+            const d = err.details || {};
+            txt.textContent =
+              err.status === 429 ? (d.retryInMinutes ? `Locked for ${d.retryInMinutes} min.` : "Too many attempts. Locked for 15 minutes.")
+              : err.status === 403 ? "This account is inactive. Contact an administrator."
+              : d.attemptsRemaining != null ? `Invalid credentials. ${d.attemptsRemaining} attempt${d.attemptsRemaining === 1 ? "" : "s"} remaining before lockout.`
+              : (err.message || "Login failed");
+            alert.classList.add("show"); beep("err");
+          });
+        return;
+      }
+
       const now = Date.now();
       if (now < loginAttempts.lockUntil) {
         const mins = Math.ceil((loginAttempts.lockUntil - now) / 60000);

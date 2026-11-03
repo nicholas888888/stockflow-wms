@@ -1,3 +1,9 @@
 node_modules/
 .DS_Store
 *.log
+
+# Backend runtime data (regenerated via `npm run seed`)
+server/data/
+server/data/db.json
+server/data/db.json.tmp
+server/test/.tmp-db-*.json
