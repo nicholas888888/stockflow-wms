@@ -7,7 +7,8 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const money = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Indonesian Rupiah: "Rp" prefix, thousands grouping with ".", no decimals.
+  const money = (n) => "Rp" + Number(n || 0).toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   const state = { user: null, route: "dashboard" };
 
@@ -257,6 +258,26 @@
       <button class="btn ${actionClass}" id="${id}">${actionLabel}</button></div>`;
   }
 
+  /* ---------- Theme (explicit Light / Night option) ---------- */
+  function applyTheme(theme) {
+    const dark = theme === "dark";
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    try { localStorage.setItem("wms_theme", dark ? "dark" : "light"); } catch (e) {}
+    // highlight the active option in every Light/Night segmented control
+    $$(".theme-seg [data-theme-choice]").forEach(b =>
+      b.classList.toggle("active", b.dataset.themeChoice === (dark ? "dark" : "light")));
+    // redraw canvas charts so they re-read theme colors
+    if (state.user && state.route === "dashboard" && VIEWS.dashboard) VIEWS.dashboard();
+  }
+  function initTheme() {
+    let saved = null;
+    try { saved = localStorage.getItem("wms_theme"); } catch (e) {}
+    if (!saved && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) saved = "dark";
+    applyTheme(saved || "light");
+    $$(".theme-seg [data-theme-choice]").forEach(b =>
+      b.addEventListener("click", () => applyTheme(b.dataset.themeChoice)));
+  }
+
   // expose for view modules
   window.__WMS = { DB, $, $$, esc, money, icon, toast, beep, openDrawer, closeOverlays, openModal, confirmModal, state, go, renderNav };
 
@@ -266,6 +287,7 @@
 
   /* ---------- boot ---------- */
   initLogin();
+  initTheme();
   // Views are attached in app.views.js (loaded via same file below)
   window.__WMS.registerViews = (v) => Object.assign(VIEWS, v);
 })();
