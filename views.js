@@ -143,23 +143,37 @@
     const x = cv.getContext("2d"); x.scale(dpr, dpr);
     const data = DB.revenueSeries, pad = 36, bw = (w - pad * 2) / data.length;
     const maxR = Math.max(...data.map(d => d.rev)), maxO = Math.max(...data.map(d => d.ord));
+    const theme = themeColors();
     // grid
-    x.strokeStyle = "#eef0f3"; x.lineWidth = 1;
+    x.strokeStyle = theme.grid; x.lineWidth = 1;
     for (let i = 0; i <= 4; i++) { const yy = pad + (h - pad * 1.6) * i / 4; x.beginPath(); x.moveTo(pad, yy); x.lineTo(w - pad, yy); x.stroke(); }
     // bars (revenue)
     data.forEach((d, i) => {
       const bh = (d.rev / maxR) * (h - pad * 1.8);
       const bx = pad + i * bw + bw * 0.22, by = h - pad * 0.8 - bh, bwi = bw * 0.56;
-      const grad = x.createLinearGradient(0, by, 0, by + bh); grad.addColorStop(0, "#6366f1"); grad.addColorStop(1, "#a5b4fc");
+      const grad = x.createLinearGradient(0, by, 0, by + bh); grad.addColorStop(0, theme.bar1); grad.addColorStop(1, theme.bar2);
       x.fillStyle = grad; roundRect(x, bx, by, bwi, bh, 5); x.fill();
-      x.fillStyle = "#94a3b8"; x.font = "11px Inter"; x.textAlign = "center"; x.fillText(d.d, pad + i * bw + bw / 2, h - 10);
+      x.fillStyle = theme.muted; x.font = "11px Inter"; x.textAlign = "center"; x.fillText(d.d, pad + i * bw + bw / 2, h - 10);
     });
     // line (orders)
     x.strokeStyle = "#22d3ee"; x.lineWidth = 2.5; x.beginPath();
     data.forEach((d, i) => { const px = pad + i * bw + bw / 2, py = h - pad * 0.8 - (d.ord / maxO) * (h - pad * 1.8); i ? x.lineTo(px, py) : x.moveTo(px, py); });
     x.stroke();
     data.forEach((d, i) => { const px = pad + i * bw + bw / 2, py = h - pad * 0.8 - (d.ord / maxO) * (h - pad * 1.8);
-      x.fillStyle = "#fff"; x.beginPath(); x.arc(px, py, 4, 0, 7); x.fill(); x.strokeStyle = "#06b6d4"; x.lineWidth = 2.5; x.stroke(); });
+      x.fillStyle = themeColors().surface; x.beginPath(); x.arc(px, py, 4, 0, 7); x.fill(); x.strokeStyle = "#06b6d4"; x.lineWidth = 2.5; x.stroke(); });
+  }
+  // Read current theme colors from CSS variables so charts match light/dark.
+  function themeColors() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (n, fb) => (cs.getPropertyValue(n) || "").trim() || fb;
+    return {
+      grid: v("--line-2", "#eef0f3"),
+      muted: v("--muted", "#94a3b8"),
+      surface: v("--surface", "#ffffff"),
+      ink: v("--ink", "#0f172a"),
+      bar1: v("--brand", "#6366f1"),
+      bar2: v("--brand-600", "#a5b4fc"),
+    };
   }
   function roundRect(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
   function drawDonut() {
@@ -167,9 +181,10 @@
     let a = -Math.PI / 2; const tot = DB.channelSplit.reduce((s, c) => s + c.value, 0);
     DB.channelSplit.forEach(c => { const slice = c.value / tot * Math.PI * 2;
       x.beginPath(); x.moveTo(cx, cy); x.arc(cx, cy, r, a, a + slice); x.closePath(); x.fillStyle = c.color; x.fill(); a += slice; });
-    x.beginPath(); x.arc(cx, cy, 36, 0, 7); x.fillStyle = "#fff"; x.fill();
-    x.fillStyle = "#0f172a"; x.font = "700 20px Inter"; x.textAlign = "center"; x.fillText("621", cx, cy - 2);
-    x.fillStyle = "#94a3b8"; x.font = "10px Inter"; x.fillText("orders", cx, cy + 13);
+    const tc = themeColors();
+    x.beginPath(); x.arc(cx, cy, 36, 0, 7); x.fillStyle = tc.surface; x.fill();
+    x.fillStyle = tc.ink || "#0f172a"; x.font = "700 20px Inter"; x.textAlign = "center"; x.fillText("621", cx, cy - 2);
+    x.fillStyle = tc.muted; x.font = "10px Inter"; x.fillText("orders", cx, cy + 13);
   }
 
   /* ============================ PRODUCTS ============================ */
@@ -227,12 +242,13 @@
     const t = $("#pTable");
     if (!list.length) { t.innerHTML = `<tbody><tr><td><div class="empty"><div class="ic">🔍</div>No products match your filters</div></td></tr></tbody>`; return; }
     t.innerHTML = `
-      <thead><tr><th>Product</th><th>Category / Brand</th><th>Location</th><th>Stock health</th><th class="right">Price</th><th></th></tr></thead>
+      <thead><tr><th>Product</th><th>Category / Brand</th><th>Size / Variation</th><th>Location</th><th>Stock health</th><th class="right">Price</th><th></th></tr></thead>
       <tbody>${list.map(p => `
         <tr>
           <td><div class="cell-prod">${thumbHtml(p)}
             <div><b>${esc(p.name)}</b><span class="mono">${p.sku}</span></div></div></td>
           <td>${esc(p.cat)}<div class="muted" style="font-size:12px">${esc(p.brand)}</div></td>
+          <td>${p.size ? `<span class="badge b-blue">${esc(p.size)}</span>` : '<span class="muted">—</span>'}${p.variation ? `<div class="muted" style="font-size:12px;margin-top:3px">${esc(p.variation)}</div>` : ""}</td>
           <td><span class="badge b-gray" style="font-family:var(--font)">📍 ${p.loc}</span></td>
           <td style="min-width:170px">
             <div class="row-between" style="margin-bottom:4px">${stockLabel(p)}<b>${p.avail}</b></div>
@@ -262,7 +278,7 @@
     }));
   }
   function productDrawer(p) {
-    const edit = !!p; p = p || { img: "📦", name: "", sku: "", ean: "", cat: "Gloves", brand: "Rival", loc: "", phys: 0, avail: 0, reserved: 0, transit: 0, safety: 0, price: 0, cost: 0 };
+    const edit = !!p; p = p || { img: "📦", name: "", sku: "", ean: "", cat: "Gloves", brand: "Rival", loc: "", size: "", variation: "", color: "", weight: 0, phys: 0, avail: 0, reserved: 0, transit: 0, safety: 0, price: 0, cost: 0 };
     openDrawer(`
       <div class="drawer__head"><div><h3>${edit ? "Edit" : "New"} Product</h3><p>${edit ? esc(p.sku) : "Create a catalog item"}</p></div>
         <button class="x-btn" id="dClose">✕</button></div>
@@ -288,6 +304,14 @@
           <div class="field"><label>Bin / Warehouse location</label><input class="input" id="fLoc" value="${esc(p.loc)}" placeholder="Aisle-02-Shelf-B"/></div>
         </div>
         <div class="hr mt-18"></div>
+        <div class="form-sec-title">Variant & details</div>
+        <div class="form-grid cols-2">
+          <div class="field"><label>Size</label><input class="input" id="fSize" value="${esc(p.size || "")}" placeholder="e.g. M, L, 16oz, One Size"/></div>
+          <div class="field"><label>Variation</label><input class="input" id="fVariation" value="${esc(p.variation || "")}" placeholder="e.g. Red, Limited Edition"/></div>
+          <div class="field"><label>Color</label><input class="input" id="fColor" value="${esc(p.color || "")}" placeholder="e.g. Black"/></div>
+          <div class="field"><label>Weight (kg)</label><input class="input" id="fWeight" type="number" step="0.01" value="${p.weight || 0}"/></div>
+        </div>
+        <div class="hr mt-18"></div>
         <div class="form-sec-title">Stock levels</div>
         <div class="form-grid cols-2">
           <div class="field"><label>Physical stock</label><input class="input" id="fPhys" type="number" value="${p.phys}"/></div>
@@ -299,8 +323,8 @@
         <div class="hr mt-18"></div>
         <div class="form-sec-title">Pricing</div>
         <div class="form-grid cols-2">
-          <div class="field"><label>Sale price ($)</label><input class="input" id="fPrice" type="number" step="0.01" value="${p.price}"/></div>
-          <div class="field"><label>Cost price ($)</label><input class="input" id="fCost" type="number" step="0.01" value="${p.cost}"/></div>
+          <div class="field"><label>Sale price (Rp)</label><input class="input" id="fPrice" type="number" step="1" value="${p.price}"/></div>
+          <div class="field"><label>Cost price (Rp)</label><input class="input" id="fCost" type="number" step="1" value="${p.cost}"/></div>
         </div>
       </div>
       <div class="drawer__foot"><button class="btn btn--ghost" id="dCancel">Cancel</button>
@@ -348,6 +372,7 @@
       // If an image is still uploading, wait so its URL is included.
       if (uploadInFlight) { toast("Waiting for image upload…", "info"); await uploadInFlight; }
       const num = (id) => Number($("#" + id).value || 0);
+      const val = (id) => ($("#" + id) ? $("#" + id).value.trim() : "");
       const payload = {
         img: p.img || "📦",
         name: $("#fName").value.trim(),
@@ -356,6 +381,7 @@
         cat: $("#fCat").value,
         brand: $("#fBrand").value,
         loc: $("#fLoc").value.trim(),
+        size: val("fSize"), variation: val("fVariation"), color: val("fColor"), weight: num("fWeight"),
         phys: num("fPhys"), avail: num("fAvail"), reserved: num("fReserved"),
         transit: num("fTransit"), safety: num("fSafety"), price: num("fPrice"), cost: num("fCost"),
       };

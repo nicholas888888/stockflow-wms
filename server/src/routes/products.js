@@ -69,6 +69,10 @@ export function register(router) {
       safety: Number(b.safety || 0),
       price: Number(b.price || 0),
       cost: Number(b.cost || 0),
+      size: b.size || "",
+      variation: b.variation || "",
+      color: b.color || "",
+      weight: Number(b.weight || 0),
       imageUrl: b.imageUrl || null,
       deleted: false,
     };
@@ -87,9 +91,9 @@ export function register(router) {
     if (b.sku && b.sku.toLowerCase() !== p.sku.toLowerCase() &&
         col("products").some((x) => x.sku.toLowerCase() === b.sku.toLowerCase()))
       throw new HttpError(409, "SKU must be unique");
-    const numeric = ["phys", "avail", "reserved", "transit", "safety", "price", "cost"];
+    const numeric = ["phys", "avail", "reserved", "transit", "safety", "price", "cost", "weight"];
     const patch = {};
-    for (const k of ["img","name","sku","ean","cat","brand","loc","imageUrl"]) if (k in b) patch[k] = b[k];
+    for (const k of ["img","name","sku","ean","cat","brand","loc","imageUrl","size","variation","color"]) if (k in b) patch[k] = b[k];
     for (const k of numeric) if (k in b) patch[k] = Number(b[k]);
     update("products", id, patch);
     bus.emit("event", { type: "product.updated", icon: "✏️", color: "b-violet", text: `${p.sku} updated & synced to channels`, ts: Date.now() });
