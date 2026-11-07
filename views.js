@@ -306,13 +306,14 @@
     $("#dClose").onclick = $("#dCancel").onclick = closeOverlays;
 
     // --- image upload wiring ---
-    let pendingFile = null;        // selected but not-yet-uploaded File (new product)
     let uploadedUrl = p.imageUrl || null;
+    let uploadInFlight = null;     // Promise while an upload is running
     const preview = $("#fPreview");
+    const uploadBox = $("#fUpload");
     if (uploadedUrl && apiMode && API.imageSrc) preview.style.backgroundImage = `url("${API.imageSrc(uploadedUrl)}")`;
     const fileInput = $("#fImageInput");
-    $("#fUpload").onclick = () => fileInput.click();
-    fileInput.onchange = async () => {
+    uploadBox.onclick = () => fileInput.click();
+    fileInput.onchange = () => {
       const file = fileInput.files && fileInput.files[0];
       if (!file) return;
       if (file.size > 8 * 1024 * 1024) { toast("Image exceeds 8MB", "err"); return; }
@@ -320,19 +321,30 @@
       const reader = new FileReader();
       reader.onload = (e) => { preview.textContent = ""; preview.style.backgroundImage = `url("${e.target.result}")`; };
       reader.readAsDataURL(file);
-      if (!apiMode) { pendingFile = file; toast("Image selected (mock mode — not persisted)", "info"); return; }
-      if (edit) {
-        // product exists → upload now
-        const r = await apiDo(API.uploadProductImage(p.id, file), "Image uploaded");
-        if (r && r.imageUrl) { uploadedUrl = r.imageUrl; await SYNC.refresh("products"); }
-      } else {
-        // new product → upload to the standalone endpoint, attach URL on create
-        const r = await apiDo(API.uploadImage(file), "Image uploaded");
-        if (r && r.url) uploadedUrl = r.url;
+
+      if (!apiMode) {
+        toast("⚠️ Backend not connected — image preview only, won't be saved", "err");
+        return;
       }
+      // upload now (track the promise so Save can await it)
+      uploadBox.textContent = "⏳ Uploading…";
+      uploadInFlight = (async () => {
+        try {
+          const r = edit ? await API.uploadProductImage(p.id, file) : await API.uploadImage(file);
+          uploadedUrl = r.imageUrl || r.url || uploadedUrl;
+          if (edit) await SYNC.refresh("products");
+          uploadBox.textContent = "✅ Image uploaded — click to replace";
+          toast("Image uploaded", "ok");
+        } catch (e) {
+          uploadBox.textContent = "⬆️ Click to upload a primary image";
+          toast(e.message || "Upload failed", "err");
+        } finally { uploadInFlight = null; }
+      })();
     };
 
     $("#dSave").onclick = async () => {
+      // If an image is still uploading, wait so its URL is included.
+      if (uploadInFlight) { toast("Waiting for image upload…", "info"); await uploadInFlight; }
       const num = (id) => Number($("#" + id).value || 0);
       const payload = {
         img: p.img || "📦",
