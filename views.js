@@ -18,9 +18,11 @@
   const badge = (cls, text, dot) => `<span class="badge ${cls}">${dot ? `<span class="d" style="background:currentColor"></span>` : ""}${text}</span>`;
   const chanTag = (ch) => {
     const map = { TikTok: ["tiktok", "TK"], Shopee: ["shopee", "SP"], Tokopedia: ["tokopedia", "TP"] };
-    const [cls, ab] = map[ch]; return `<span class="chan ${cls}"><span class="c">${ab}</span>${ch}</span>`;
+    const key = Object.keys(map).find((k) => String(ch || "").toLowerCase().includes(k.toLowerCase()));
+    const [cls, ab] = map[key] || ["gray", String(ch || "?").slice(0, 2).toUpperCase()];
+    return `<span class="chan ${cls}"><span class="c">${ab}</span>${ch || "Unknown"}</span>`;
   };
-  const statusBadge = (st) => { const s = DB.orderStatuses[st]; return badge(s.badge, s.label, true); };
+  const statusBadge = (st) => { const s = DB.orderStatuses[st] || { badge: "b-gray", label: st || "Unknown" }; return badge(s.badge, s.label, true); };
   const stockColor = (p) => p.phys === 0 ? "#dc2626" : p.avail <= p.safety ? "#d97706" : "#16a34a";
   const stockLabel = (p) => p.phys === 0 ? badge("b-red", "Out of stock", true) : p.avail <= p.safety ? badge("b-amber", "Low stock", true) : badge("b-green", "In stock", true);
   // Render a real uploaded image when present, else the emoji placeholder.
