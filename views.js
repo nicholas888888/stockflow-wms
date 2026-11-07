@@ -23,6 +23,13 @@
   const statusBadge = (st) => { const s = DB.orderStatuses[st]; return badge(s.badge, s.label, true); };
   const stockColor = (p) => p.phys === 0 ? "#dc2626" : p.avail <= p.safety ? "#d97706" : "#16a34a";
   const stockLabel = (p) => p.phys === 0 ? badge("b-red", "Out of stock", true) : p.avail <= p.safety ? badge("b-amber", "Low stock", true) : badge("b-green", "In stock", true);
+  // Render a real uploaded image when present, else the emoji placeholder.
+  const thumbHtml = (p, cls = "thumb") => {
+    const src = p.imageUrl && API && API.imageSrc ? API.imageSrc(p.imageUrl) : null;
+    return src
+      ? `<div class="${cls}" style="background-image:url('${src}');background-size:cover;background-position:center"></div>`
+      : `<div class="${cls}">${p.img || "📦"}</div>`;
+  };
 
   /* ============================ DASHBOARD ============================ */
   function dashboard() {
@@ -221,7 +228,7 @@
       <thead><tr><th>Product</th><th>Category / Brand</th><th>Location</th><th>Stock health</th><th class="right">Price</th><th></th></tr></thead>
       <tbody>${list.map(p => `
         <tr>
-          <td><div class="cell-prod"><div class="thumb">${p.img}</div>
+          <td><div class="cell-prod">${thumbHtml(p)}
             <div><b>${esc(p.name)}</b><span class="mono">${p.sku}</span></div></div></td>
           <td>${esc(p.cat)}<div class="muted" style="font-size:12px">${esc(p.brand)}</div></td>
           <td><span class="badge b-gray" style="font-family:var(--font)">📍 ${p.loc}</span></td>
@@ -259,8 +266,11 @@
         <button class="x-btn" id="dClose">✕</button></div>
       <div class="drawer__body">
         <div class="form-sec-title">Media</div>
-        <div class="upload">⬆️ Drag primary image or click to upload</div>
-        <div class="gallery"><div class="g">${p.img}</div><div class="g">➕</div><div class="g">➕</div></div>
+        <input type="file" id="fImageInput" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none"/>
+        <div class="upload" id="fUpload">⬆️ Click to upload a primary image (PNG, JPG, GIF, WEBP · max 8MB)</div>
+        <div class="gallery">
+          <div class="g" id="fPreview" style="overflow:hidden;background-size:cover;background-position:center">${p.imageUrl ? "" : p.img}</div>
+        </div>
         <div class="hr mt-18"></div>
         <div class="form-sec-title">Details</div>
         <div class="form-grid">
@@ -294,6 +304,34 @@
       <div class="drawer__foot"><button class="btn btn--ghost" id="dCancel">Cancel</button>
         <button class="btn btn--primary" id="dSave">${edit ? "Save changes" : "Create product"}</button></div>`);
     $("#dClose").onclick = $("#dCancel").onclick = closeOverlays;
+
+    // --- image upload wiring ---
+    let pendingFile = null;        // selected but not-yet-uploaded File (new product)
+    let uploadedUrl = p.imageUrl || null;
+    const preview = $("#fPreview");
+    if (uploadedUrl && apiMode && API.imageSrc) preview.style.backgroundImage = `url("${API.imageSrc(uploadedUrl)}")`;
+    const fileInput = $("#fImageInput");
+    $("#fUpload").onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) { toast("Image exceeds 8MB", "err"); return; }
+      // local preview immediately
+      const reader = new FileReader();
+      reader.onload = (e) => { preview.textContent = ""; preview.style.backgroundImage = `url("${e.target.result}")`; };
+      reader.readAsDataURL(file);
+      if (!apiMode) { pendingFile = file; toast("Image selected (mock mode — not persisted)", "info"); return; }
+      if (edit) {
+        // product exists → upload now
+        const r = await apiDo(API.uploadProductImage(p.id, file), "Image uploaded");
+        if (r && r.imageUrl) { uploadedUrl = r.imageUrl; await SYNC.refresh("products"); }
+      } else {
+        // new product → upload to the standalone endpoint, attach URL on create
+        const r = await apiDo(API.uploadImage(file), "Image uploaded");
+        if (r && r.url) uploadedUrl = r.url;
+      }
+    };
+
     $("#dSave").onclick = async () => {
       const num = (id) => Number($("#" + id).value || 0);
       const payload = {
@@ -307,6 +345,7 @@
         phys: num("fPhys"), avail: num("fAvail"), reserved: num("fReserved"),
         transit: num("fTransit"), safety: num("fSafety"), price: num("fPrice"), cost: num("fCost"),
       };
+      if (uploadedUrl) payload.imageUrl = uploadedUrl;
       if (!payload.name || !payload.sku) { toast("Name and SKU are required", "err"); return; }
       if (apiMode) {
         const ok = await apiDo(edit ? API.updateProduct(p.id, payload) : API.createProduct(payload),

@@ -3,6 +3,8 @@ import { col, findById, insert, update, persist } from "../lib/store.js";
 import { HttpError } from "../lib/http.js";
 import { authenticate, requirePage } from "../auth.js";
 import { bus } from "../lib/ws.js";
+import { parseMultipart } from "../lib/multipart.js";
+import { saveImage } from "../lib/uploads.js";
 
 const nextProductId = () => (col("products").reduce((m, p) => Math.max(m, p.id), 0) || 0) + 1;
 
@@ -67,6 +69,7 @@ export function register(router) {
       safety: Number(b.safety || 0),
       price: Number(b.price || 0),
       cost: Number(b.cost || 0),
+      imageUrl: b.imageUrl || null,
       deleted: false,
     };
     insert("products", rec);
@@ -86,7 +89,7 @@ export function register(router) {
       throw new HttpError(409, "SKU must be unique");
     const numeric = ["phys", "avail", "reserved", "transit", "safety", "price", "cost"];
     const patch = {};
-    for (const k of ["img","name","sku","ean","cat","brand","loc"]) if (k in b) patch[k] = b[k];
+    for (const k of ["img","name","sku","ean","cat","brand","loc","imageUrl"]) if (k in b) patch[k] = b[k];
     for (const k of numeric) if (k in b) patch[k] = Number(b[k]);
     update("products", id, patch);
     bus.emit("event", { type: "product.updated", icon: "✏️", color: "b-violet", text: `${p.sku} updated & synced to channels`, ts: Date.now() });
@@ -103,6 +106,33 @@ export function register(router) {
     update("products", id, { deleted: true });
     bus.emit("event", { type: "product.deleted", icon: "🗑️", color: "b-gray", text: `${p.sku} soft-deleted`, ts: Date.now() });
     return { ok: true, id, softDeleted: true };
+  });
+
+  // Image upload (multipart/form-data, field name "image").
+  router.post("/api/products/:id/image", async (req, res, ctx) => {
+    const user = authenticate(req);
+    requirePage(user, "products");
+    const id = Number(ctx.params.id);
+    const p = findById("products", id);
+    if (!p || p.deleted) throw new HttpError(404, "Product not found");
+    const { files } = await parseMultipart(req);
+    const file = files.image || files.file || Object.values(files)[0];
+    if (!file) throw new HttpError(400, "No image file (use field name 'image')");
+    const saved = saveImage(file);
+    update("products", id, { imageUrl: saved.url });
+    bus.emit("event", { type: "product.image", icon: "🖼️", color: "b-blue", text: `${user.name} uploaded an image for ${p.sku}`, ts: Date.now() });
+    return { ok: true, id, imageUrl: saved.url, size: saved.size };
+  });
+
+  // Standalone upload (e.g. new-product form before the product exists).
+  router.post("/api/uploads", async (req, res, ctx) => {
+    const user = authenticate(req);
+    requirePage(user, "products");
+    const { files } = await parseMultipart(req);
+    const file = files.image || files.file || Object.values(files)[0];
+    if (!file) throw new HttpError(400, "No file (use field name 'image')");
+    const saved = saveImage(file);
+    return { ok: true, ...saved };
   });
 
   // Stock adjustment (inventory specialist capability)

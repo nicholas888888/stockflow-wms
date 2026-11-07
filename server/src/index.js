@@ -6,6 +6,7 @@ import { Router, json, applyCors, readBody, HttpError } from "./lib/http.js";
 import { load, init } from "./lib/store.js";
 import { buildSeed } from "./seed.js";
 import { handleUpgrade, bus, clientCount } from "./lib/ws.js";
+import { serveUpload } from "./lib/uploads.js";
 
 import * as products from "./routes/products.js";
 import * as orders from "./routes/orders.js";
@@ -43,10 +44,15 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/" && req.method === "GET") {
     return json(res, 200, {
       name: "StockFlow WMS API",
-      version: "1.0.0",
+      version: "1.1.0",
       docs: "/api/health · see server/README.md for the full endpoint list",
       wsClients: clientCount(),
     });
+  }
+
+  // Serve uploaded images: GET /uploads/<file>
+  if (req.method === "GET" && pathname.startsWith("/uploads/")) {
+    return serveUpload(res, pathname.slice("/uploads/".length));
   }
 
   const matched = router.match(req.method, pathname);
@@ -55,7 +61,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const body = ["POST", "PUT", "PATCH"].includes(req.method) ? await readBody(req) : {};
+    const isMultipart = (req.headers["content-type"] || "").startsWith("multipart/form-data");
+    // For multipart uploads, hand the raw stream to the handler (don't JSON-parse).
+    const body = (!isMultipart && ["POST", "PUT", "PATCH"].includes(req.method)) ? await readBody(req) : {};
     const query = Object.fromEntries(url.searchParams.entries());
     const ctx = { params: matched.params, query, body, url };
 

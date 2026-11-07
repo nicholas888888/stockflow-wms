@@ -7,3 +7,13 @@ server/data/
 server/data/db.json
 server/data/db.json.tmp
 server/test/.tmp-db-*.json
+
+# Uploaded images (user content, not source)
+server/uploads/
+
+# Test temp artifacts
+server/test/.tmp-uploads-*/
+server/_e2e*.js
+server/_e2e*-db.json
+server/_e2e*-uploads/
+server/_looptest.js
