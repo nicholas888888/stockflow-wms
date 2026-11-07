@@ -84,7 +84,23 @@
     integrations: () => req("GET", "/api/integrations"),
     updateIntegration: (id, patch) => req("PUT", "/api/integrations/" + id, patch),
     syncIntegration: (id) => req("POST", `/api/integrations/${id}/sync`),
+    oauthUrl: (id) => req("GET", `/api/integrations/${id}/oauth-url`),
+    simulateWebhook: (id) => req("POST", `/api/integrations/${id}/simulate-webhook`),
     dashboard: () => req("GET", "/api/dashboard"),
+
+    // image upload (multipart). `file` is a browser File object.
+    uploadProductImage(productId, file) {
+      const fd = new FormData(); fd.append("image", file);
+      return fetch(BASE + `/api/products/${productId}/image`, { method: "POST", headers: token ? { Authorization: "Bearer " + token } : {}, body: fd })
+        .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || r.statusText); return d; });
+    },
+    uploadImage(file) {
+      const fd = new FormData(); fd.append("image", file);
+      return fetch(BASE + "/api/uploads", { method: "POST", headers: token ? { Authorization: "Bearer " + token } : {}, body: fd })
+        .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || r.statusText); return d; });
+    },
+    // Resolve a stored imageUrl against the API base for <img src>.
+    imageSrc(url) { return url ? (url.startsWith("http") ? url : BASE + url) : null; },
 
     // live stream
     connectLive(onEvent) {

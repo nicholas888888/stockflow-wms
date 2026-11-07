@@ -218,6 +218,53 @@ test("dashboard metrics shape", async () => {
   assert.ok(Array.isArray(r.body.stockAlerts));
 });
 
+/* -------- Integrations: OAuth connect → sync → webhook pipeline -------- */
+test("integration oauth-url returns a simulated URL", async () => {
+  const r = await call("GET", "/api/integrations/shopee/oauth-url", { token });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, "simulated");
+  assert.ok(r.body.url.includes("/callback"));
+});
+
+test("sync requires a connected channel", async () => {
+  // tokopedia seeds as 'Reconnect' (not Connected) → should 409
+  const r = await call("POST", "/api/integrations/tokopedia/sync", { token });
+  assert.equal(r.status, 409);
+});
+
+test("oauth callback connects, then sync imports orders", async () => {
+  const cb = await call("GET", "/api/integrations/tokopedia/callback", { token });
+  assert.equal(cb.body.status, "Connected");
+  const before = (await call("GET", "/api/orders/pipeline", { token })).body.total;
+  const sync = await call("POST", "/api/integrations/tokopedia/sync", { token });
+  assert.equal(sync.status, 200);
+  assert.ok(sync.body.ordersImported >= 1);
+  const after = (await call("GET", "/api/orders/pipeline", { token })).body.total;
+  assert.equal(after, before + sync.body.ordersImported);
+});
+
+test("webhook receiver ingests an order (no auth required)", async () => {
+  const before = (await call("GET", "/api/orders/pipeline", { token })).body.total;
+  const r = await call("POST", "/api/integrations/shopee/webhook", {
+    body: { channel: "shopee", event: "order.create", data: { externalId: "SP-TEST-1", customer: "Test Buyer", courier: "Shopee Express", items: [{ sku: "SUP-TEE-M-NVY", qty: 2 }] } },
+  });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.orderId);
+  const after = (await call("GET", "/api/orders/pipeline", { token })).body.total;
+  assert.equal(after, before + 1);
+  // de-dupe: same externalId again → duplicate, no new order
+  const dup = await call("POST", "/api/integrations/shopee/webhook", {
+    body: { channel: "shopee", event: "order.create", data: { externalId: "SP-TEST-1", items: [{ sku: "SUP-TEE-M-NVY", qty: 2 }] } },
+  });
+  assert.equal(dup.body.duplicate, true);
+});
+
+test("product accepts imageUrl on create", async () => {
+  const r = await call("POST", "/api/products", { token, body: { name: "Img Prod", sku: "IMG-1", imageUrl: "/uploads/x.png" } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.imageUrl, "/uploads/x.png");
+});
+
 test.after(() => {
   try { fs.unlinkSync(process.env.DATA_FILE); } catch {}
 });

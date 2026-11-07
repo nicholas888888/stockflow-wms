@@ -103,6 +103,45 @@ drives the client's beep.
 | POST | `/api/returns` | Create RMA |
 | POST | `/api/returns/:id/disposition` | `{ action: restock\|defective }` |
 
+### Image upload  *(page: `products`)*
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/products/:id/image` | `multipart/form-data`, field `image` → stores file, sets product `imageUrl` |
+| POST | `/api/uploads` | Standalone upload (for the new-product form) → returns `{ url }` |
+| GET | `/uploads/:file` | Serves a stored image (path-traversal safe, cached) |
+
+Accepted types: PNG, JPG, GIF, WEBP, SVG (max 8MB). The type is validated by
+**magic bytes**, not the client-declared MIME, so a non-image can't be stored by
+faking its content-type. Files are written to `server/uploads/` (git-ignored).
+
+### Integrations — OAuth, sync & webhooks  *(page: `integrations`)*
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/integrations/:id/oauth-url` | Authorization URL (live if credentials set, else simulated) |
+| GET | `/api/integrations/:id/callback` | OAuth callback — completes connect |
+| POST | `/api/integrations/:id/sync` | Pulls orders from the channel and **ingests** them (requires Connected) |
+| POST | `/api/integrations/:id/webhook` | **Public** webhook receiver — ingests `order.create` events |
+| POST | `/api/integrations/:id/simulate-webhook` | Fire a test webhook (imports a demo order) |
+
+Imported orders are created as native WMS orders in `Pending`, with available
+stock auto-deducted (oversell protection). External IDs are de-duplicated.
+
+#### Going live with Shopee / TikTok
+The clients in `src/integrations/{shopee,tiktok}.js` are real (correct endpoints,
+HMAC signing, OAuth URL builders) but **require credentials and a public HTTPS
+callback** — marketplaces will not call `localhost`. Set:
+
+```bash
+# Shopee Open Platform
+SHOPEE_PARTNER_ID=...    SHOPEE_PARTNER_KEY=...    SHOPEE_REDIRECT_URL=https://your.app/cb
+# TikTok Shop Partner
+TIKTOK_APP_KEY=...       TIKTOK_APP_SECRET=...     TIKTOK_REDIRECT_URL=https://your.app/cb
+```
+
+Without these, the integration runs in **simulated mode** against an in-process
+mock marketplace (`src/integrations/mock-marketplace.js`) so the full
+connect → sync → webhook → import pipeline is demonstrable end to end.
+
 ### Admin  *(page: `users` / `integrations` / `dashboard`)*
 | Method | Path | Notes |
 |---|---|---|

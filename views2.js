@@ -628,8 +628,9 @@
               <span class="muted">Sync interval</span><b>every ${interval} min</b></div>
             <div class="row-between" style="font-size:12.5px;padding:8px 0;border-top:1px solid var(--line-2)">
               <span class="muted">Errors (24h)</span><b style="color:${errorsN?"var(--red)":"var(--green)"}">${errorsN}</b></div>
-            <button class="btn ${connected?"btn--ghost":"btn--primary"} btn--block btn--sm mt-18" data-cfg="${c.id}">
-              ${connected?"Manage connection":"Reconnect via OAuth"}</button>
+            ${connected
+              ? `<div style="display:flex;gap:8px;margin-top:18px"><button class="btn btn--primary btn--sm" style="flex:1" data-sync="${c.id}">🔁 Sync now</button><button class="btn btn--ghost btn--sm" style="flex:1" data-hook="${c.id}">📨 Test webhook</button></div>`
+              : `<button class="btn btn--primary btn--block btn--sm mt-18" data-oauth="${c.id}">Connect via OAuth</button>`}
           </div>`; }).join("")}
       </div>
       <div class="grid g-2">
@@ -663,16 +664,56 @@
         toast(`${integ.name} ${c.checked ? "connected" : "disconnected"}`, c.checked ? "ok" : "info");
       }
     });
-    $$("[data-cfg]").forEach(b => b.onclick = async () => {
-      const integ = DB.integrations.find(x => x.id === b.dataset.cfg);
+    // OAuth connect
+    $$("[data-oauth]").forEach(b => b.onclick = async () => {
+      const integ = DB.integrations.find(x => x.id === b.dataset.oauth);
       if (apiMode) {
-        const ok = await apiDo(API.syncIntegration(integ.id), `${integ.name} sync triggered`);
-        if (!ok) return;
-        await SYNC.refresh("integrations"); integrations();
+        const info = await apiDo(API.oauthUrl(integ.id));
+        if (!info) return;
+        oauthModal(integ, info);
       } else {
-        toast(`Opening OAuth config for ${integ.name}`, "info");
+        integ.status = "Connected"; toast(`${integ.name} connected (mock)`, "ok"); integrations();
       }
     });
+    // Sync now — pulls & imports orders
+    $$("[data-sync]").forEach(b => b.onclick = async () => {
+      const integ = DB.integrations.find(x => x.id === b.dataset.sync);
+      if (apiMode) {
+        const r = await apiDo(API.syncIntegration(integ.id));
+        if (!r) return;
+        toast(`${integ.name}: pulled ${r.ordersPulled}, imported ${r.ordersImported} order(s)`, "ok");
+        await SYNC.refresh("integrations"); await SYNC.refresh("orders"); renderNav(); integrations();
+      } else { toast(`${integ.name} sync complete (mock)`, "ok"); }
+    });
+    // Test webhook — simulates an inbound order.create event
+    $$("[data-hook]").forEach(b => b.onclick = async () => {
+      const integ = DB.integrations.find(x => x.id === b.dataset.hook);
+      if (apiMode) {
+        const r = await apiDo(API.simulateWebhook(integ.id));
+        if (!r) return;
+        toast(`Webhook received → order ${r.orderId} imported from ${integ.name}`, "ok");
+        await SYNC.refresh("integrations"); await SYNC.refresh("orders"); renderNav(); integrations();
+      } else { toast(`Simulated ${integ.name} webhook (mock)`, "info"); }
+    });
+  }
+
+  function oauthModal(integ, info) {
+    const live = info.mode === "live";
+    openModal(`<div class="modal__body"><div class="modal__ic" style="background:var(--violet-bg);font-size:24px">🔗</div>
+      <h3>Connect ${esc(integ.name)}</h3>
+      <p>${live ? "Live OAuth: you'll be redirected to " + esc(integ.name) + " to authorize access." : "Simulated OAuth flow (no real credentials configured). This grants a mock token so you can see the full connect → sync → webhook pipeline."}</p>
+      <div class="mono muted" style="font-size:11px;word-break:break-all;margin-top:12px;text-align:left;background:var(--surface-2);padding:10px;border-radius:8px">${esc(info.url || info.error || "")}</div>
+      </div>
+      <div class="modal__foot"><button class="btn btn--ghost" id="oaCancel" style="flex:1">Cancel</button>
+      <button class="btn btn--primary" id="oaGo" style="flex:1">${live ? "Authorize" : "Simulate authorize"}</button></div>`);
+    $("#oaCancel").onclick = closeOverlays;
+    $("#oaGo").onclick = async () => {
+      if (live) { window.open(info.url, "_blank"); closeOverlays(); toast("Complete authorization in the new tab, then Sync", "info"); return; }
+      // simulated: hit the callback URL to complete the mock connect
+      try { await fetch(info.url, { headers: API.token ? { Authorization: "Bearer " + API.token } : {} }); } catch {}
+      closeOverlays(); toast(`${integ.name} connected via OAuth`, "ok");
+      await SYNC.refresh("integrations"); integrations();
+    };
   }
 
   W.registerViews({ inbound, returns, orders, picking, packing, outbound, users, integrations });
