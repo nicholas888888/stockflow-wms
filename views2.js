@@ -14,8 +14,14 @@
     catch (e) { toast(e.message || "Request failed", "err"); return false; }
   }
   const badge = (cls, text, dot) => `<span class="badge ${cls}">${dot ? `<span class="d" style="background:currentColor"></span>` : ""}${text}</span>`;
-  const chanTag = (ch) => { const map = { TikTok: ["tiktok", "TK"], Shopee: ["shopee", "SP"], Tokopedia: ["tokopedia", "TP"] }; const [cls, ab] = map[ch]; return `<span class="chan ${cls}"><span class="c">${ab}</span>${ch}</span>`; };
-  const statusBadge = (st) => { const s = DB.orderStatuses[st]; return badge(s.badge, s.label, true); };
+  const chanTag = (ch) => {
+    const map = { TikTok: ["tiktok", "TK"], Shopee: ["shopee", "SP"], Tokopedia: ["tokopedia", "TP"] };
+    // Normalize names like "TikTok Shop" → "TikTok" and guard unknown channels.
+    const key = Object.keys(map).find((k) => String(ch || "").toLowerCase().includes(k.toLowerCase()));
+    const [cls, ab] = map[key] || ["gray", String(ch || "?").slice(0, 2).toUpperCase()];
+    return `<span class="chan ${cls}"><span class="c">${ab}</span>${ch || "Unknown"}</span>`;
+  };
+  const statusBadge = (st) => { const s = DB.orderStatuses[st] || { badge: "b-gray", label: st || "Unknown" }; return badge(s.badge, s.label, true); };
 
   /* ============================ INBOUND (PO) ============================ */
   function inbound() {
